@@ -7,7 +7,7 @@ This repository contains **no game assets or code**. You need your own legally d
 ## Status
 
 - [x] `main.dol` split with [decomp-toolkit](https://github.com/encounter/decomp-toolkit) (~10,000 functions, 1,161 units)
-- [ ] Reverse the `.gc` level-pack format (contains per-level compiled code)
+- [x] Reverse the `.gc` pack format; `tools/gctool.py` converts level code modules to ELF
 - [ ] Identify and name engine (Chimera) subsystems
 - [ ] Decompile engine code
 - [ ] Android port (SDL2 + GX→GLES via Aurora, Havok replacement)

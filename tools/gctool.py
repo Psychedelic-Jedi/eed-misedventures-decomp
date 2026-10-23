@@ -82,8 +82,18 @@ class CodeModule:
         for i in range(nrel):
             a, off, add = struct.unpack_from(">3I", rec, h + rel_off + i * 12)
             self.relocs.append((a >> 16, a & 0xFFFF, off, add))
-        branch = [self.syms[t] for k, t, _, _ in self.relocs if k == 4 and self.syms[t]]
-        self.text_start = min(branch) if branch else 0
+        # Text starts at the earliest of: a bl target, an instruction carrying a
+        # HA/LO/REL24 relocation (data never has those), or a stack-frame prologue.
+        cands = [self.syms[t] for k, t, _, _ in self.relocs if k == 4 and self.syms[t]]
+        cands += [(off & ~3) for k, _, off, _ in self.relocs if k in (2, 3, 4)]
+        first = min(cands) if cands else 0
+        img = self.image
+        prologues = [o for o in range(0, len(img) - 3, 4) if img[o:o + 2] == b"\x94\x21"]
+        earlier = [o for o in prologues if o <= first]
+        if earlier:
+            first = earlier[0]
+        self.text_start = first
+        self.prologues = [o for o in prologues if o >= first]
 
 
 R_MAP = {1: 1, 2: 4, 3: 6, 4: 10}  # gc kind -> R_PPC_ADDR32/ADDR16_LO/ADDR16_HA/REL24
@@ -107,8 +117,10 @@ def write_elf(mod, path):
     syms.append((0, 0, 0, 3, 0, 2))  # section .data
     nlocal_base = len(syms)
     symmap = {}
-    defined = sorted({v for i, v in enumerate(mod.syms) if i >= 7 and i not in import_idx and v})
-    func_set = {mod.syms[t] for k, t, _, _ in mod.relocs if k == 4}
+    defined = {v for i, v in enumerate(mod.syms) if i >= 7 and i not in import_idx and v}
+    func_set = {mod.syms[t] for k, t, _, _ in mod.relocs if k == 4} | set(mod.prologues)
+    func_set.add(ts)
+    defined = sorted(defined | func_set)
     for v in defined:
         if v >= ts:
             nm = f"fn_{v:X}" if v in func_set else f"lbl_{v:X}"
@@ -221,8 +233,13 @@ def main():
             open(fn, "wb").write(rec)
         elif cmd == "elf" and t == 0x26:
             fn = os.path.join(out, f"{safe}.o")
-            write_elf(CodeModule(rec), fn)
-            print("  wrote", fn)
+            try:
+                write_elf(CodeModule(rec), fn)
+                print("  wrote", fn)
+            except Exception as e:  # keep going so one bad module doesn't stop the batch
+                import traceback
+                print(f"  ERROR converting {name} ({rid:08x}): {e!r}")
+                traceback.print_exc()
 
 
 if __name__ == "__main__":

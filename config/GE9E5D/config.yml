@@ -1,0 +1,9 @@
+name: main
+object: sys/main.dol
+hash: 94afc1057b78917c66ca37251ee998d5840dfd12
+object_base: orig/GE9E5D
+symbols: config/GE9E5D/symbols.txt
+splits: config/GE9E5D/splits.txt
+detect_objects: true
+detect_strings: true
+write_asm: true

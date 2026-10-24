@@ -10,6 +10,7 @@ it will become the Android runtime (SDL + Aurora).
 | `hle.c`, `hle_list.txt` | Native replacements for SDK functions. `tools/hle_patch.py` marks each listed function's first instruction with `mfspr r0, HID0`, which DolRecomp routes to the instruction fallback → `hle_dispatch()`. |
 | `disc.c` | Disc reader for DVD emulation: plain ISO/GCM, CISO, or an extracted folder mapped through `sys/fst.bin`. |
 | `gx_fifo.c`, `gx_render.c`, `gx.h` | GX command processor (BP/CP/XF state, display lists, PE interrupts) and software renderer. |
+| `input.c` | Platform controller state → `PADRead`; `EED_INPUT="300-310:A,900-910:START"` for scripted tests. |
 | `build.sh` | Patch → DolRecomp → incremental compile (only changed chunks) → link `build/recomp/boot_test`. |
 
 ## Build & run (Linux, from repo root)
@@ -42,7 +43,9 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
 13. **First rendered frame** (software reference renderer `gx_render.c`): vertex decode incl. indexed arrays and
     display lists, XF transform/projection/viewport, all GX texture formats (incl. CMPR, palettes via TMEM),
     TEV combiner, alpha test, blending, depth, scissor, EFB->XFB copies. Frames: `EED_FRAMES=dir` (PPM). ✅
-14. Next ⏳
+14. Controller input: `PADRead` HLE fed by `input.c` (scripted via `EED_INPUT` for headless tests; SDL later).
+    Pressing A on the language select makes the game load the next loading screen (`ls_intro`). ✅
+15. Next ⏳
     - GLES backend for Android reusing the decode/TEV front half.
     - PAD/SI input (language select waits for a button).
     - Null reads in `fn_800DCB38` (near Bink code).

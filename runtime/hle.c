@@ -7,6 +7,8 @@
 #include "irq.h"
 #include "modules.h"
 #include "alias.h"
+#include "input.h"
+#include "hw.h"
 
 static void hle___OSInitAudioSystem(CPUState *cpu) {
     (void)cpu; /* DSP/ARAM bring-up not needed: audio will be produced natively. */
@@ -142,6 +144,26 @@ static void hle_VMAlloc(CPUState *cpu) {
     int ok = host_region_add(va, size);
     fprintf(stderr, "[vm] VMAlloc(%08X, 0x%X) -> %s\n", va, size, ok ? "host memory" : "FAILED");
     cpu->gpr[3] = ok;
+}
+
+/* u32 PADRead(PADStatus status[4]): 12-byte records
+ * { u16 button; s8 stickX, stickY, substickX, substickY; u8 triggerL, triggerR, analogA, analogB; s8 err; } */
+static void hle_PADRead(CPUState *cpu) {
+    u32 st = cpu->gpr[3];
+    static unsigned long long last;
+    if (vi_frames != last) { input_update(vi_frames); last = vi_frames; }
+    for (int i = 0; i < 4; i++, st += 12) {
+        PadState *p = &g_pad[i];
+        mem_write16(cpu, st + 0, p->connected ? p->buttons : 0);
+        mem_write8(cpu, st + 2, (u8)p->stick_x);  mem_write8(cpu, st + 3, (u8)p->stick_y);
+        mem_write8(cpu, st + 4, (u8)p->cstick_x); mem_write8(cpu, st + 5, (u8)p->cstick_y);
+        mem_write8(cpu, st + 6, p->trigger_l);    mem_write8(cpu, st + 7, p->trigger_r);
+        mem_write8(cpu, st + 8, (p->buttons & PAD_A) ? 0xFF : 0);
+        mem_write8(cpu, st + 9, (p->buttons & PAD_B) ? 0xFF : 0);
+        mem_write8(cpu, st + 10, p->connected ? 0 : (u8)-1);  /* PAD_ERR_NONE / PAD_ERR_NO_CONTROLLER */
+        mem_write8(cpu, st + 11, 0);
+    }
+    cpu->gpr[3] = 0;
 }
 
 typedef void (*HleFn)(CPUState *);

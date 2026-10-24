@@ -10,3 +10,4 @@ LU_RelocateBatch      # engine relocator for LU code -> install pre-linked modul
 LU_FixupModuleHeader  # place LU code at its fixed pre-linked address
 VMInit                # SDK virtual memory (ARAM paging) -> host memory, no page faults
 VMAlloc
+PADRead               # controllers: state comes from the platform input layer (input.c)

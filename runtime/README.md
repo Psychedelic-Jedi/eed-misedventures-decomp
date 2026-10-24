@@ -25,9 +25,18 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
 4. `DSPInit` → `__DSP_boot_task` (HLE no-op). ✅
 5. AX init: `DSPAddTask` HLE marks the ucode task running. ✅
 6. `vprintf` HLE: OSReport/OSPanic output goes to stdout; game prints SDK banners and `Engine: 3.1.1060`. ✅
-7. Engine exits (memory dump, then `_ExitProcess`) because no files can be read → DVD emulation (DI registers +
-   PI interrupts + apploader FST setup) written, testing pending `sys/fst.bin`. ⏳
+7. DVD emulation: DI command execution + PI interrupts; FST/disc ID/bi2 set up like the apploader. ✅
+   Reads `engine.ini`, `icon.rgb`, `lvloader.gc`, `en/lvloader.gc` (128 KB chunks), `lvloader.gc.gca`.
+8. Interrupts: external (PI), decrementer (OS alarms), VI retrace at 60 Hz, PE finish/token.
+   `OSDisable/Enable/RestoreInterrupts` are HLE'd so pending interrupts fire as soon as MSR[EE] is set. ✅
+9. GX command stream parsed (`gx_fifo.c`): BP/CP/XF/draw sizing from VCD/VAT; `GXDrawDone` completes. ✅
+10. **Next blockers** ⏳
+    - The engine jumps into LU code loaded in the heap (`0x80442CA4`) → implement the loader hook
+      (copy the pre-linked module from `gctool.py linkall` to its fixed address) and link module C into the runtime.
+    - The async file reader copies `en/lvloader.gc` to `0x7E000000` (not RAM): destination pointer comes from
+      an allocation/handle that isn't set up yet — investigate after modules run.
 
 Run with a disc: `./build/recomp/boot_test main.dol 20 path/to/game.ciso` (or an extracted folder).
+At timeout the harness prints OS threads, GX counters and interrupt state.
 
-All 30 LU modules (`gctool.py linkall`) translate (814k instrs, 0 unknown) and compile (220 files); not yet linked into the runtime.
+All 30 LU modules translate (814k instrs, 0 unknown) and compile (220 files); not yet linked into the runtime.

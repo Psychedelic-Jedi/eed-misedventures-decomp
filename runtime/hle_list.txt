@@ -3,3 +3,6 @@ __OSInitAudioSystem     # boots the audio DSP and waits for its mailbox; host au
 __DSP_boot_task   # mailbox handshake with the DSP ucode loader
 DSPAddTask            # AX microcode task: marked running, init flag set natively
 vprintf               # MSL vprintf: OSReport/OSPanic output goes to host stdout
+OSDisableInterrupts   # MSR[EE] handling; pending interrupts fire as soon as EE is re-enabled
+OSEnableInterrupts
+OSRestoreInterrupts

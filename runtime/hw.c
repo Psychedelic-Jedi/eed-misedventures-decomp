@@ -6,6 +6,7 @@
 #include <string.h>
 #include "hw.h"
 #include "disc.h"
+#include "gx_fifo.h"
 #include <stdlib.h>
 
 static u8 g_regs[0x10000];
@@ -95,9 +96,23 @@ static void di_execute(CPUState *cpu) {
 #define PI_INTSR 0x3000
 #define PI_INTMR 0x3004
 #define PI_DI    0x00000004u
+#define PI_VI    0x00000100u
+#define PI_PE_TOKEN  0x00000200u
+#define PI_PE_FINISH 0x00000400u
+#define PE_CTRL  0x100A   /* bit0 token int enable, bit1 finish int enable, bit2 token, bit3 finish */
+#define PE_TOKEN 0x100E
+#define VI_DI0   0x2030
+#define VI_DI1   0x2034
+#define VI_INT   0x80000000u
+#define VI_ENB   0x10000000u
 #define PI_RSWST 0x00010000u  /* reset switch not pressed */
 static u32 pi_cause(void) {
-    u32 c = (u32)get(PI_INTSR, 4) & ~(PI_DI);
+    u32 c = (u32)get(PI_INTSR, 4) & ~(PI_DI | PI_VI | PI_PE_TOKEN | PI_PE_FINISH);
+    u32 pe = (u32)get(PE_CTRL, 2);
+    if (pe_token_pending && (pe & 1)) c |= PI_PE_TOKEN;
+    if (pe_finish_pending && (pe & 2)) c |= PI_PE_FINISH;
+    for (u32 r = VI_DI0; r <= VI_DI1; r += 4)
+        if (((u32)get(r, 4) & (VI_INT | VI_ENB)) == (VI_INT | VI_ENB)) c |= PI_VI;
     u32 disr = (u32)get(DISR, 4);
     if (((disr & DI_TCINT) && (disr & DI_TCMSK)) || ((disr & DI_DEINT) && (disr & DI_DEMSK))) c |= PI_DI;
     return c | PI_RSWST;
@@ -107,7 +122,18 @@ int hw_interrupt_pending(void) {
     return (pi_cause() & (u32)get(PI_INTMR, 4) & ~PI_RSWST) != 0;
 }
 
+static unsigned g_unmapped_logged;
+static int unmapped(CPUState *cpu, u32 ea, u8 size, int w, u64 v) {
+    if ((ea & 0xFFFF0000u) == 0xCC000000u) return 0;
+    if (g_unmapped_logged++ < 40)
+        fprintf(stderr, "[mem] unmapped %s%u %08X%s pc=%08X lr=%08X\n", w ? "W" : "R", size * 8, ea,
+                w ? "" : "", cpu->pc, cpu->lr);
+    (void)v;
+    return 1;
+}
+
 u64 hw_read(CPUState *cpu, u32 ea, u8 size) {
+    if (unmapped(cpu, ea, size, 0, 0)) return 0;
     hw_reads++;
     u32 off = ea & 0xFFFF;
     u64 v = get(off, size);
@@ -118,6 +144,10 @@ u64 hw_read(CPUState *cpu, u32 ea, u8 size) {
         v = pi_cause(); if (size == 2) v = (off & 2) ? (v & 0xFFFF) : (v >> 16);
         break;
     case DICVR: case DICVR + 2: v &= ~1ull; break; /* lid closed */
+    case PE_CTRL:
+        v = (get(PE_CTRL, 2) & 3) | (pe_token_pending ? 4 : 0) | (pe_finish_pending ? 8 : 0);
+        break;
+    case PE_TOKEN: v = pe_token_value; break;
     case 0x680C: case 0x680E:               /* EXI0/1/2 control: transfers complete instantly */
     case 0x6820: case 0x6822:
     case 0x6834: case 0x6836:
@@ -139,12 +169,25 @@ u64 hw_read(CPUState *cpu, u32 ea, u8 size) {
 }
 
 void hw_write(CPUState *cpu, u32 ea, u64 v, u8 size) {
+    if (unmapped(cpu, ea, size, 1, v)) return;
     hw_writes++;
+    if ((ea & 0xFFFFF000u) == 0xCC008000u) { /* GX write-gather pipe: any offset feeds the FIFO */
+        u8 b[8];
+        for (int i = 0; i < size; i++) b[i] = (u8)(v >> ((size - 1 - i) * 8));
+        gx_fifo_write(b, size);
+        return;
+    }
     u32 off = ea & 0xFFFF;
     if (g_logged < (unsigned)hw_log_limit && seen_once(ea, cpu->pc, 1)) {
         g_logged++;
         fprintf(stderr, "[mmio] W%u %08X (%s) = %llX pc=%08X\n", size * 8, ea, hw_name(ea),
                 (unsigned long long)v, cpu->pc);
+    }
+    if (size == 2 && off == PE_CTRL) {      /* status bits are write-1-to-clear */
+        if (v & 4) pe_token_pending = 0;
+        if (v & 8) pe_finish_pending = 0;
+        put(PE_CTRL, v & 3, 2);
+        return;
     }
     if (size == 4 && off == DISR) {         /* interrupt status bits are write-1-to-clear */
         u64 old = get(DISR, 4);
@@ -168,4 +211,23 @@ void hw_write(CPUState *cpu, u32 ea, u64 v, u8 size) {
         break;
     }
     put(off, v, size);
+}
+
+void hw_debug_dump(void) {
+    fprintf(stderr, "[hw] DISR=%08llX DICR=%08llX PI_INTSR(cause)=%08X PI_INTMR=%08llX pending=%d\n",
+            (unsigned long long)get(DISR, 4), (unsigned long long)get(DICR, 4), pi_cause(),
+            (unsigned long long)get(PI_INTMR, 4), hw_interrupt_pending());
+}
+
+/* Vertical retrace every 1/60 s of time base (40.5 MHz): raise VI display interrupts. */
+unsigned long long vi_frames;
+void hw_tick(CPUState *cpu) {
+    static u64 next;
+    if (cpu->timebase < next) return;
+    next = cpu->timebase + 675000;
+    vi_frames++;
+    for (u32 r = VI_DI0; r <= VI_DI1; r += 4) {
+        u32 v = (u32)get(r, 4);
+        if (v & VI_ENB) put(r, v | VI_INT, 4);
+    }
 }

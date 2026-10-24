@@ -11,17 +11,23 @@
 #include "hle.h"
 #include "hw.h"
 #include "disc.h"
+#include "irq.h"
+#include "gx_fifo.h"
 
 /* dolrecomp_call_depth is defined in cpu.c */
 
 static u32 g_spr[1024];
 static u32 spr_read(CPUState *cpu, u16 spr, u32 cia) {
-    (void)cpu; (void)cia;
+    (void)cia;
     if (spr == 287) return PPC_GEKKO_PVR;   /* PVR */
+    if (spr == 22) return dec_read(cpu);    /* DEC */
     return g_spr[spr & 1023];
 }
 static void spr_write(CPUState *cpu, u16 spr, u32 v, u32 cia) {
-    (void)cpu; (void)cia;
+    (void)cia;
+    if (spr == 22) { dec_write(cpu, v); return; }
+    if (spr >= 528 && spr <= 543) fprintf(stderr, "[bat] %s%cBAT%u%c = %08X (pc %08X)\n", "", spr < 536 ? 'I' : 'D', ((spr - 528) & 7) / 2, (spr & 1) ? 'L' : 'U', v, cia);
+    if (spr >= 560 && spr <= 575) fprintf(stderr, "[bat] ext BAT spr %u = %08X\n", spr, v);
     g_spr[spr & 1023] = v;
 }
 
@@ -54,38 +60,30 @@ static void update_timebase(CPUState *cpu) {
     cpu->timebase = ns * 81ull / 2000ull; /* 40.5e6 / 1e9 */
 }
 
-/* Deliver an external interrupt the way the OS's 0x500 vector stub would:
- * save volatile state into the current OSContext, then enter the (recompiled)
- * ExternalInterruptHandler(exception=4, context). It returns via OSLoadContext/rfi. */
-#define OS_CURRENT_CONTEXT 0x800000D4u
-#define EXTERNAL_INTERRUPT_HANDLER 0x80147E10u
-static void take_external_interrupt(CPUState *cpu) {
-    u32 ctx = mem_read32(cpu, OS_CURRENT_CONTEXT);
-    mem_write32(cpu, ctx + 0x0C, cpu->gpr[3]);
-    mem_write32(cpu, ctx + 0x10, cpu->gpr[4]);
-    mem_write32(cpu, ctx + 0x14, cpu->gpr[5]);
-    mem_write16(cpu, ctx + 0x1A2, mem_read16(cpu, ctx + 0x1A2) | 2);
-    mem_write32(cpu, ctx + 0x80, cpu->cr);
-    mem_write32(cpu, ctx + 0x84, cpu->lr);
-    mem_write32(cpu, ctx + 0x88, cpu->ctr);
-    mem_write32(cpu, ctx + 0x8C, cpu->xer);
-    mem_write32(cpu, ctx + 0x198, cpu->pc);
-    mem_write32(cpu, ctx + 0x19C, cpu->msr);
-    cpu->srr0 = cpu->pc;
-    cpu->srr1 = cpu->msr;
-    cpu->msr &= ~0x8000u;          /* EE off while handling */
-    cpu->gpr[3] = 4;               /* __OS_EXCEPTION_EXTERNAL_INTERRUPT */
-    cpu->gpr[4] = ctx;
-    cpu->pc = EXTERNAL_INTERRUPT_HANDLER;
-}
-
 static u32 be32(const unsigned char *p) { return (u32)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 
 static CPUState cpu;
+/* Dolphin OS thread list: __OSActiveThreadQueue head at 0x800000DC; OSThread:
+ * context (srr0 @0x198, lr @0x84), state u16 @0x2C8, priority @0x2D0, queue @0x2DC, linkActive.next @0x2FC */
+static void dump_threads(CPUState *c) {
+    static const char *st[] = {"?", "READY", "RUNNING", "?", "WAITING", "?", "?", "?", "MORIBUND"};
+    u32 cur = mem_read32(c, 0x800000E4);
+    for (u32 t = mem_read32(c, 0x800000DC), n = 0; t && n < 32; t = mem_read32(c, t + 0x2FC), n++) {
+        u16 state = mem_read16(c, t + 0x2C8);
+        fprintf(stderr, "[thread] %08X%s state=%s prio=%d pc=%08X lr=%08X queue=%08X\n", t, t == cur ? "*" : " ",
+                state < 9 ? st[state] : "?", (int)mem_read32(c, t + 0x2D0), mem_read32(c, t + 0x198),
+                mem_read32(c, t + 0x84), mem_read32(c, t + 0x2DC));
+    }
+}
+
 static void on_alarm(int s) {
     (void)s;
-    fprintf(stderr, "\n[timeout] pc=%08X lr=%08X r1=%08X mmio R=%llu W=%llu\n", cpu.pc, cpu.lr,
-            cpu.gpr[1], hw_reads, hw_writes);
+    dump_threads(&cpu);
+    fprintf(stderr, "[gx] cmds=%llu draws=%llu drawdone=%llu tokens=%llu vi_frames=%llu\n", gx_cmds, gx_draws, gx_draw_done, gx_tokens, vi_frames);
+    hw_debug_dump();
+    fprintf(stderr, "[cpu] msr=%08X\n", cpu.msr);
+    fprintf(stderr, "\n[timeout] pc=%08X lr=%08X r1=%08X mmio R=%llu W=%llu irqs=%llu\n", cpu.pc, cpu.lr,
+            cpu.gpr[1], hw_reads, hw_writes, irq_count);
     exit(2);
 }
 
@@ -156,8 +154,8 @@ int main(int argc, char **argv) {
     for (;;) {
         cpu.downcount = 0;
         update_timebase(&cpu);
-        if ((cpu.msr & 0x8000u) && hw_interrupt_pending())
-            take_external_interrupt(&cpu);
+        hw_tick(&cpu);
+        irq_poll(&cpu);
         if (!dolrecomp_call(&cpu, cpu.pc)) {
             fprintf(stderr, "[stop] no code at pc=%08X lr=%08X after %llu blocks\n", cpu.pc, cpu.lr, blocks);
             break;
@@ -165,19 +163,29 @@ int main(int argc, char **argv) {
         if (cpu.exception == PPC_EXC_SYSTEM_CALL) {
             /* Dolphin OS's 0xC00 handler only syncs caches (used by DCFlushRange etc.). */
             cpu.exception = 0;
+            cpu.msr = cpu.srr1;            /* exception entry cleared EE etc.; rfi restores */
             cpu.pc = cpu.srr0;
             continue;
         }
         if (cpu.exception == PPC_EXC_FP_UNAVAILABLE) {
             /* Dolphin OS enables FP lazily in its 0x800 handler (OSSwitchFPUContext). */
             cpu.exception = 0;
-            cpu.msr |= 0x2000u;
+            cpu.msr = cpu.srr1 | 0x2000u;  /* back to the interrupted state, FP now on */
             cpu.pc = cpu.srr0;
             continue;
         }
         if (cpu.exception) {
             fprintf(stderr, "[stop] exception %08X (program %08X) at pc=%08X srr0=%08X srr1=%08X lr=%08X msr=%08X\n", cpu.exception, cpu.program_exception, cpu.pc, cpu.srr0, cpu.srr1, cpu.lr, cpu.msr);
             break;
+        }
+        {   /* trace MSR[EE] transitions at block boundaries */
+            static u32 last_ee = 2;
+            u32 ee = (cpu.msr >> 15) & 1;
+            if (ee != last_ee && irq_trace) {
+                static unsigned n;
+                if (n++ < 20) fprintf(stderr, "[msr] EE=%u at pc=%08X lr=%08X ctx=%08X\n", ee, cpu.pc, cpu.lr, mem_read32(&cpu, 0x800000D4));
+            }
+            last_ee = ee;
         }
         blocks++;
     }

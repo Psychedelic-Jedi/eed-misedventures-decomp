@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "hle.h"
+#include "irq.h"
 
 static void hle___OSInitAudioSystem(CPUState *cpu) {
     (void)cpu; /* DSP/ARAM bring-up not needed: audio will be produced natively. */
@@ -105,6 +106,25 @@ static void hle_vprintf(CPUState *cpu) {
     cpu->gpr[3] = (u32)strlen(buf);
 }
 
+/* ---- Interrupt enable/disable: deliver pending interrupts the moment EE is set ---- */
+int hle_pc_set; /* set by an HLE function that already chose the next pc */
+#define MSR_EE 0x8000u
+static void hle_OSDisableInterrupts(CPUState *cpu) {
+    cpu->gpr[3] = (cpu->msr >> 15) & 1;
+    cpu->msr &= ~MSR_EE;
+}
+static void hle_OSEnableInterrupts(CPUState *cpu) {
+    cpu->gpr[3] = (cpu->msr >> 15) & 1;
+    cpu->msr |= MSR_EE;
+    hle_pc_set = irq_check_on_enable(cpu, cpu->lr);
+}
+static void hle_OSRestoreInterrupts(CPUState *cpu) {
+    u32 level = cpu->gpr[3];
+    cpu->gpr[3] = (cpu->msr >> 15) & 1;
+    if (level) cpu->msr |= MSR_EE; else cpu->msr &= ~MSR_EE;
+    if (level) hle_pc_set = irq_check_on_enable(cpu, cpu->lr);
+}
+
 typedef void (*HleFn)(CPUState *);
 static const struct { u32 addr; HleFn fn; const char *name; } k_hle[] = {
 #define HLE_ENTRY(addr, name, orig) { addr, hle_##name, #name },
@@ -116,8 +136,9 @@ int hle_dispatch(CPUState *cpu, u32 cia) {
     for (unsigned i = 0; i < sizeof(k_hle) / sizeof(k_hle[0]); i++) {
         if (k_hle[i].addr == cia) {
             if (hle_trace) fprintf(stderr, "[hle] %s\n", k_hle[i].name);
+            hle_pc_set = 0;
             k_hle[i].fn(cpu);
-            cpu->pc = cpu->lr;
+            if (!hle_pc_set) cpu->pc = cpu->lr;
             return 1;
         }
     }

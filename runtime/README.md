@@ -8,6 +8,7 @@ it will become the Android runtime (SDL + Aurora).
 | `boot_test.c` | Loads `main.dol`, sets up boot state (low-memory globals, MSR), runs recompiled code, handles `sc` / FP-unavailable exceptions, drives the time base from the host clock. |
 | `hw.c` | Minimal MMIO register model for `0xCC000000` (read-back registers + "always ready" quirks), with deduplicated access logging. |
 | `hle.c`, `hle_list.txt` | Native replacements for SDK functions. `tools/hle_patch.py` marks each listed function's first instruction with `mfspr r0, HID0`, which DolRecomp routes to the instruction fallback → `hle_dispatch()`. |
+| `disc.c` | Disc reader for DVD emulation: plain ISO/GCM, CISO, or an extracted folder mapped through `sys/fst.bin`. |
 | `build.sh` | Patch → DolRecomp → incremental compile (only changed chunks) → link `build/recomp/boot_test`. |
 
 ## Build & run (Linux, from repo root)
@@ -22,4 +23,11 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
 2. `__OSInitAudioSystem` (HLE no-op). ✅
 3. DVD (DI) init, AI init (sample counter modelled). ✅
 4. `DSPInit` → `__DSP_boot_task` (HLE no-op). ✅
-5. **Stalls at `0x8015703C`**: AX waits for the DSP task's init callback → needs native AX/audio HLE. ⏳
+5. AX init: `DSPAddTask` HLE marks the ucode task running. ✅
+6. `vprintf` HLE: OSReport/OSPanic output goes to stdout; game prints SDK banners and `Engine: 3.1.1060`. ✅
+7. Engine exits (memory dump, then `_ExitProcess`) because no files can be read → DVD emulation (DI registers +
+   PI interrupts + apploader FST setup) written, testing pending `sys/fst.bin`. ⏳
+
+Run with a disc: `./build/recomp/boot_test main.dol 20 path/to/game.ciso` (or an extracted folder).
+
+All 30 LU modules (`gctool.py linkall`) translate (814k instrs, 0 unknown) and compile (220 files); not yet linked into the runtime.

@@ -6,9 +6,11 @@
 #include <string.h>
 #include <signal.h>
 #include <time.h>
+#include <unistd.h>
 #include "generated.h"
 #include "hle.h"
 #include "hw.h"
+#include "disc.h"
 
 /* dolrecomp_call_depth is defined in cpu.c */
 
@@ -52,6 +54,31 @@ static void update_timebase(CPUState *cpu) {
     cpu->timebase = ns * 81ull / 2000ull; /* 40.5e6 / 1e9 */
 }
 
+/* Deliver an external interrupt the way the OS's 0x500 vector stub would:
+ * save volatile state into the current OSContext, then enter the (recompiled)
+ * ExternalInterruptHandler(exception=4, context). It returns via OSLoadContext/rfi. */
+#define OS_CURRENT_CONTEXT 0x800000D4u
+#define EXTERNAL_INTERRUPT_HANDLER 0x80147E10u
+static void take_external_interrupt(CPUState *cpu) {
+    u32 ctx = mem_read32(cpu, OS_CURRENT_CONTEXT);
+    mem_write32(cpu, ctx + 0x0C, cpu->gpr[3]);
+    mem_write32(cpu, ctx + 0x10, cpu->gpr[4]);
+    mem_write32(cpu, ctx + 0x14, cpu->gpr[5]);
+    mem_write16(cpu, ctx + 0x1A2, mem_read16(cpu, ctx + 0x1A2) | 2);
+    mem_write32(cpu, ctx + 0x80, cpu->cr);
+    mem_write32(cpu, ctx + 0x84, cpu->lr);
+    mem_write32(cpu, ctx + 0x88, cpu->ctr);
+    mem_write32(cpu, ctx + 0x8C, cpu->xer);
+    mem_write32(cpu, ctx + 0x198, cpu->pc);
+    mem_write32(cpu, ctx + 0x19C, cpu->msr);
+    cpu->srr0 = cpu->pc;
+    cpu->srr1 = cpu->msr;
+    cpu->msr &= ~0x8000u;          /* EE off while handling */
+    cpu->gpr[3] = 4;               /* __OS_EXCEPTION_EXTERNAL_INTERRUPT */
+    cpu->gpr[4] = ctx;
+    cpu->pc = EXTERNAL_INTERRUPT_HANDLER;
+}
+
 static u32 be32(const unsigned char *p) { return (u32)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 
 static CPUState cpu;
@@ -63,7 +90,7 @@ static void on_alarm(int s) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: %s main.dol [seconds]\n", argv[0]); return 1; }
+    if (argc < 2) { fprintf(stderr, "usage: %s main.dol [seconds] [disc.iso|disc.ciso|extracted_dir]\n", argv[0]); return 1; }
     FILE *f = fopen(argv[1], "rb");
     if (!f) { perror(argv[1]); return 1; }
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
@@ -84,6 +111,28 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 18; i++) {
         u32 off = be32(d + i * 4), addr = be32(d + 0x48 + i * 4), sz = be32(d + 0x90 + i * 4);
         for (u32 j = 0; j < sz; j++) mem_write8(&cpu, addr + j, d[off + j]);
+    }
+
+    /* Disc: argv[3] = ISO/CISO image or extracted directory. */
+    if (argc > 3 && disc_open(argv[3])) {
+        u8 boot[0x440];
+        disc_read(0, boot, sizeof boot);
+        for (u32 i = 0; i < 0x20; i++) mem_write8(&cpu, 0x80000000u + i, boot[i]); /* disc ID */
+        u32 fst_off = be32(boot + 0x424), fst_size = be32(boot + 0x428);
+        u32 fst_addr = (0x81800000u - fst_size) & ~31u;  /* apploader puts the FST at the top of MEM1 */
+        u8 *fst = malloc(fst_size);
+        disc_read(fst_off, fst, fst_size);
+        for (u32 i = 0; i < fst_size; i++) mem_write8(&cpu, fst_addr + i, fst[i]);
+        free(fst);
+        mem_write32(&cpu, 0x80000034, fst_addr);          /* arena hi */
+        mem_write32(&cpu, 0x80000038, fst_addr);          /* FST location */
+        mem_write32(&cpu, 0x8000003C, be32(boot + 0x42C)); /* max FST size */
+        u8 bi2[0x2000];
+        disc_read(0x440, bi2, sizeof bi2);
+        u32 bi2_addr = fst_addr - 0x2000;
+        for (u32 i = 0; i < sizeof bi2; i++) mem_write8(&cpu, bi2_addr + i, bi2[i]);
+        mem_write32(&cpu, 0x800000F4, bi2_addr);
+        fprintf(stderr, "[boot] disc %.6s, FST %u bytes at %08X\n", boot, fst_size, fst_addr);
     }
 
     /* Minimal low-memory boot info normally written by the apploader/IPL. */
@@ -107,6 +156,8 @@ int main(int argc, char **argv) {
     for (;;) {
         cpu.downcount = 0;
         update_timebase(&cpu);
+        if ((cpu.msr & 0x8000u) && hw_interrupt_pending())
+            take_external_interrupt(&cpu);
         if (!dolrecomp_call(&cpu, cpu.pc)) {
             fprintf(stderr, "[stop] no code at pc=%08X lr=%08X after %llu blocks\n", cpu.pc, cpu.lr, blocks);
             break;

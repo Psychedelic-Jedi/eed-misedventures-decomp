@@ -65,13 +65,15 @@ u32 strings_offset    NUL-terminated import names
   Engine services are reached through API structs of function pointers (e.g. `lbl_8` → `+0x58` is an error/assert reporter taking message, file, line).
 - LU code style (r9–r11 scratch, `subfic/adde` idioms, no SDA) differs from main.dol (Metrowerks): LU modules are possibly built with a different compiler (GCC/ProDG?). Needs confirmation.
 
-### Relocation kinds (confirmed on mainmenu.gc)
+### Relocation kinds (confirmed against the engine's relocator `fn_800FF904`)
 | Kind | ELF equivalent | Where | Notes |
 |---|---|---|---|
 | 1 | `R_PPC_ADDR32` | data | function-pointer tables (callbacks); word is 0 |
 | 2 | `R_PPC_ADDR16_LO` | text | |
 | 3 | `R_PPC_ADDR16_HA` | text | always on `lis` |
 | 4 | `R_PPC_REL24` | text | `bl` |
-| 5 | `R_PPC_ADDR32` | data | switch jump tables; word pre-filled with a text-relative offset |
+| 5 | `R_PPC_REL32` | data | switch jump tables; word = target − site |
 
 `mainmenu` code: image 0x1F244 bytes, text from 0x36C0, ~190 functions, imports `memcpy`, `memset`.
+
+Loader functions in main.dol: `fn_800FF904` applies relocations (then `DCFlushRange`); `fn_800FF044` looks up imports by name in the export registry `lbl_802A9C84`, which `fn_800FF51C(name, value)` fills.

@@ -5,6 +5,10 @@ Usage:
   gctool.py list    <file.gc>
   gctool.py extract <file.gc> <outdir>     # dump every resource as a raw file
   gctool.py elf     <file.gc> <outdir>     # convert code modules (type 0x26) to PPC ELF objects
+  gctool.py link    <file.gc> <base> <exports.txt> <outdir>
+                                           # pre-link code modules at a fixed address -> .dol for recompiling
+  gctool.py linkall <gc_dir> <exports.txt> <outdir>
+                                           # pre-link every module in a folder at stable addresses
 
 Format notes (reverse engineered, see docs/gc_format.md):
   0x000  header (0x40): version 0x03010424, pack id, LU name, game name, ...
@@ -96,9 +100,11 @@ class CodeModule:
         self.prologues = [o for o in prologues if o >= first]
 
 
-R_MAP = {1: 1, 2: 4, 3: 6, 4: 10, 5: 1}
+R_MAP = {1: 1, 2: 4, 3: 6, 4: 10, 5: 1}  # ELF view only; see note
 # gc kind -> ELF: 1 ADDR32 (pointer tables), 2 ADDR16_LO, 3 ADDR16_HA, 4 REL24 (bl),
-# 5 ADDR32 (switch jump tables; word pre-filled with a text-relative offset)
+# 5 REL32 (switch jump tables: word = target - site). Semantics confirmed against the
+# engine's own relocator, fn_800FF904 in main.dol. The ELF output (for disassembly only)
+# shows kind 5 as ADDR32 so tools display the jump target; `link` applies true REL32.
 
 
 def write_elf(mod, path):
@@ -210,11 +216,106 @@ def write_elf(mod, path):
         fp.write(ehdr + bytes(body) + b"".join(sh))
 
 
+def load_exports(path):
+    ex = {}
+    for line in open(path):
+        line = line.split("#")[0].split()
+        if len(line) == 2:
+            ex[line[0]] = int(line[1], 16)
+    return ex
+
+
+def link_module(mod, base, exports):
+    """Apply relocations with the image placed at `base`. Returns linked image bytes."""
+    img = bytearray(mod.image)
+    imp = {i: n for i, n in mod.imports}
+    missing = set()
+    for kind, tgt, off, add in mod.relocs:
+        if tgt in imp:
+            name = imp[tgt]
+            if name not in exports:
+                missing.add(name)
+                continue
+            S = exports[name] + add
+        elif tgt == 1:
+            S = base + add
+        else:
+            S = base + mod.syms[tgt] + add
+        S &= 0xFFFFFFFF
+        P = base + off
+        if kind == 1:
+            struct.pack_into(">I", img, off, S)
+        elif kind == 5:
+            struct.pack_into(">I", img, off, (S - P) & 0xFFFFFFFF)
+        elif kind == 2:
+            struct.pack_into(">H", img, off, S & 0xFFFF)
+        elif kind == 3:
+            struct.pack_into(">H", img, off, ((S + 0x8000) >> 16) & 0xFFFF)
+        elif kind == 4:
+            rel = (S - P) & 0xFFFFFFFF
+            if not (rel < 0x2000000 or rel >= 0xFE000000):
+                raise ValueError(f"branch out of range at {P:#x} -> {S:#x}")
+            w = u32(img, off)
+            struct.pack_into(">I", img, off, (w & 0xFC000003) | (rel & 0x03FFFFFC))
+        else:
+            raise ValueError(f"unknown reloc kind {kind}")
+    if missing:
+        raise ValueError(f"unresolved imports: {sorted(missing)}")
+    return bytes(img)
+
+
+def write_dol(path, base, text_start, img):
+    """Minimal DOL: text0 = module text, data0 = module data; entry = text start."""
+    text, data = img[text_start:], img[:text_start]
+    hdr = bytearray(0x100)
+    pos = 0x100
+    secs = []
+    if text:
+        secs.append((0, pos, base + text_start, text)); pos += (len(text) + 31) & ~31
+    if data:
+        secs.append((7, pos, base, data)); pos += (len(data) + 31) & ~31
+    body = bytearray(pos - 0x100)
+    for slot, off, addr, b in secs:
+        struct.pack_into(">I", hdr, slot * 4, off)
+        struct.pack_into(">I", hdr, 0x48 + slot * 4, addr)
+        struct.pack_into(">I", hdr, 0x90 + slot * 4, (len(b) + 31) & ~31)
+        body[off - 0x100:off - 0x100 + len(b)] = b
+    struct.pack_into(">I", hdr, 0xE0, base + text_start)
+    open(path, "wb").write(bytes(hdr) + bytes(body))
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)
     cmd, path = sys.argv[1], sys.argv[2]
+    if cmd == "linkall":
+        # gctool.py linkall <dir with .gc files> <exports.txt> <outdir>
+        # Lays out every code module from 0x81800000 (above the 24 MB of MEM1, within
+        # bl range of main.dol) in a stable, name-sorted order; writes layout.txt.
+        exports, out = load_exports(sys.argv[3]), sys.argv[4]
+        os.makedirs(out, exist_ok=True)
+        mods = []
+        for fn in sorted(os.listdir(path)):
+            if not fn.endswith(".gc"):
+                continue
+            pk = GcPack(open(os.path.join(path, fn), "rb").read())
+            for t, rid, off in pk.resources:
+                if t == 0x26 and 0 < off < len(pk.d):
+                    name, rec = pk.record(off)
+                    mods.append((name, CodeModule(rec)))
+        mods.sort(key=lambda x: x[0])
+        base = 0x81800000
+        with open(os.path.join(out, "layout.txt"), "w") as lay:
+            for name, m in mods:
+                img = link_module(m, base, exports)
+                write_dol(os.path.join(out, f"{name}.dol"), base, m.text_start, img)
+                lay.write(f"{name} {base:#010x} text {base + m.text_start:#010x} size {m.image_size:#x}\n")
+                print(f"  {name:10} {base:#010x} size {m.image_size:#x}")
+                base = (base + m.image_size + 0xFFFF) & ~0xFFFF
+        if base > 0x82000000:
+            print("WARNING: layout exceeds 0x82000000; engine calls may be out of bl range")
+        return
     pack = GcPack(open(path, "rb").read())
     print(f"{path}: LU '{pack.lu_name}' game '{pack.game}' version {pack.version:#010x}, "
           f"{len(pack.resources)} resources")
@@ -226,6 +327,25 @@ def main():
                 m = CodeModule(rec)
                 print(f"      code image {m.image_size:#x} (text from {m.text_start:#x}), "
                       f"{len(m.syms)} syms, {len(m.relocs)} relocs, imports {[n for _, n in m.imports]}")
+        return
+    if cmd == "link":
+        # gctool.py link <file.gc> <base_hex> <exports.txt> <outdir>
+        base, exports, out = int(sys.argv[3], 16), load_exports(sys.argv[4]), sys.argv[5]
+        os.makedirs(out, exist_ok=True)
+        for t, rid, off in pack.resources:
+            if t == 0x26 and 0 < off < len(pack.d):
+                name, rec = pack.record(off)
+                m = CodeModule(rec)
+                img = link_module(m, base, exports)
+                fn = os.path.join(out, f"{name}.dol")
+                write_dol(fn, base, m.text_start, img)
+                with open(os.path.join(out, f"{name}.syms.txt"), "w") as fp:
+                    for v in sorted(set(m.syms[7:]) | set(m.prologues)):
+                        if v:
+                            fp.write(f"{base + v:08X} {'fn' if v >= m.text_start else 'data'}\n")
+                print(f"  linked {name} at {base:#x} (text {base + m.text_start:#x}, "
+                      f"size {m.image_size:#x}) -> {fn}")
+                base = (base + m.image_size + 0xFFFF) & ~0xFFFF
         return
     out = sys.argv[3]
     os.makedirs(out, exist_ok=True)

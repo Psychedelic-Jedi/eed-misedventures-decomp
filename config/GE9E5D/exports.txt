@@ -1,0 +1,37 @@
+# Engine exports resolved by name when LU code modules load (name address)
+# Source: calls to fn_800FF51C(name, value) in static constructors of main.dol
+gApiHud 0x80289CF0
+gApiAnim 0x8028A9C0
+gApiCamera 0x802890C0
+gApiChimera 0x80289190
+gApiCons 0x80289378
+gApiConsole 0x80289460
+gApiCutscene 0x802894A8
+gApiDatabase 0x802A167C
+gApiExtra 0x80289518
+gApiEyetoy 0x80289608
+gApiFBEffects 0x802896E8
+gApiGBALink 0x802A1620
+gApiGame 0x80289750
+gApiGameObj 0x802898D0
+gApiGamespy 0x80289A70
+gApiGraphics 0x80289B40
+gApiInput 0x80289DF8
+gApiLight 0x80289E68
+gApiLoadSave 0x80289EE8
+gApiMath 0x8028A088
+gApiMetrics 0x8028A1F8
+gApiMicrophone 0x8028A240
+gApiNetwork 0x8028A2F0
+gApiParticle 0x8028A354
+gApiPhysic 0x8028A400
+gApiProjector 0x8028A578
+gApiRegLib 0x8028A5E0
+gApiSound 0x8028A640
+gApiSpline 0x8028A720
+gApiStdio 0x8028A7A0
+gApiStdlib 0x8028A810
+gApiString 0x8028A890
+gApiTransfo 0x8028A920
+memcpy 0x8000E138
+memset 0x8000E04C

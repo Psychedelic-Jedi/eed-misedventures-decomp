@@ -8,6 +8,7 @@
 #include "modules.h"
 #include "alias.h"
 #include "input.h"
+#include "card.h"
 #include "hw.h"
 
 static void hle___OSInitAudioSystem(CPUState *cpu) {
@@ -165,6 +166,24 @@ static void hle_PADRead(CPUState *cpu) {
     }
     cpu->gpr[3] = 0;
 }
+
+/* ---- Memory card (card.c) ---- */
+static void hle_CARDGetResultCode(CPUState *c) { card_GetResultCode(c); }
+static void hle_CARDFreeBlocks(CPUState *c) { card_FreeBlocks(c); }
+static void hle_CARDCheckAsync(CPUState *c) { card_CheckAsync(c); }
+static void hle_CARDProbeEx(CPUState *c) { card_ProbeEx(c); }
+static void hle_CARDMountAsync(CPUState *c) { card_MountAsync(c); }
+static void hle_CARDMount(CPUState *c) { card_Mount(c); }
+static void hle_CARDUnmount(CPUState *c) { card_Unmount(c); }
+static void hle_CARDFormatAsync(CPUState *c) { card_FormatAsync(c); }
+static void hle_CARDOpen(CPUState *c) { card_Open(c); }
+static void hle_CARDClose(CPUState *c) { card_Close(c); }
+static void hle_CARDCreateAsync(CPUState *c) { card_CreateAsync(c); }
+static void hle_CARDReadAsync(CPUState *c) { card_ReadAsync(c); }
+static void hle_CARDWriteAsync(CPUState *c) { card_WriteAsync(c); }
+static void hle_CARDDeleteAsync(CPUState *c) { card_DeleteAsync(c); }
+static void hle_CARDGetStatus(CPUState *c) { card_GetStatus(c); }
+static void hle_CARDSetStatus(CPUState *c) { card_SetStatus(c); }
 
 typedef void (*HleFn)(CPUState *);
 static const struct { u32 addr; HleFn fn; const char *name; } k_hle[] = {

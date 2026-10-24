@@ -11,3 +11,20 @@ LU_FixupModuleHeader  # place LU code at its fixed pre-linked address
 VMInit                # SDK virtual memory (ARAM paging) -> host memory, no page faults
 VMAlloc
 PADRead               # controllers: state comes from the platform input layer (input.c)
+# Memory card: CARD library replaced by host files (card.c)
+CARDGetResultCode
+CARDFreeBlocks
+CARDCheckAsync
+CARDProbeEx
+CARDMountAsync
+CARDMount
+CARDUnmount
+CARDFormatAsync
+CARDOpen
+CARDClose
+CARDCreateAsync
+CARDReadAsync
+CARDWriteAsync
+CARDDeleteAsync
+CARDGetStatus
+CARDSetStatus

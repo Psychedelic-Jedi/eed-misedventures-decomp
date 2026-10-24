@@ -11,6 +11,7 @@ it will become the Android runtime (SDL + Aurora).
 | `disc.c` | Disc reader for DVD emulation: plain ISO/GCM, CISO, or an extracted folder mapped through `sys/fst.bin`. |
 | `gx_fifo.c`, `gx_render.c`, `gx.h` | GX command processor (BP/CP/XF state, display lists, PE interrupts) and software renderer. |
 | `input.c` | Platform controller state → `PADRead`; `EED_INPUT="300-310:A,900-910:START"` for scripted tests. |
+| `card.c` | Memory card: CARD API (probe/mount/open/create/read/write/delete/status/free blocks) on host files. |
 | `build.sh` | Patch → DolRecomp → incremental compile (only changed chunks) → link `build/recomp/boot_test`. |
 
 ## Build & run (Linux, from repo root)
@@ -50,8 +51,10 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
     memory card prompts → Bink/Havok logos → legal screen → **title screen (PRESS START)** → **main menu**
     (New Game / Load Game / Credits). Modules loaded: lvloader, ls_intro, gbl_api, intro, ls_hub1, mainmenu. ✅
     Test input: `EED_INPUT="300-310:A,700-710:A,950-1100:DOWN,1300-1310:A,1500-1600:UP,1750-1760:A,2400-2410:START"`
-17. Next ⏳
-    - Memory card (CARD library / EXI device → host save file): New Game requires it.
+17. Memory card: CARD library replaced by host files (`card.c`, folder `$EED_MEMCARD`). The game finds a
+    59-block card, offers to create save data, and New Game proceeds: global, pphub1 and bnk_plr modules load,
+    then the first scam's movie and the World 1 Mission 1 loading screen are requested. ✅
+18. Next ⏳
     - Lighting (XF light units) for correct colours.
     - GLES backend for Android reusing the decode/TEV front half.
     - PAD/SI input (language select waits for a button).

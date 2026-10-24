@@ -12,7 +12,7 @@
 #   6. link libeed.so and package + sign the APK -> Download/eed.apk
 #
 # Nothing derived from the game leaves your phone. Needs:
-#   pkg install clang cmake make python apksigner git
+#   pkg install clang cmake make python apksigner openssl-tool git
 #   and dtk (decomp-toolkit) in ~/.cargo/bin.
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -150,10 +150,15 @@ llvm-readelf -d "$WORK/apk/lib/arm64-v8a/libeed.so" 2>/dev/null | grep -E "NEEDE
 python3 "$ROOT/tools/axml.py" "$ROOT/runtime/android/AndroidManifest.xml" "$WORK/AndroidManifest.bin"
 python3 "$ROOT/tools/apk_pack.py" - "$WORK/unsigned.apk" "AndroidManifest.xml=$WORK/AndroidManifest.bin" \
     "lib/arm64-v8a/libeed.so=$WORK/apk/lib/arm64-v8a/libeed.so"
-KS=$WORK/eed.keystore
-[ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass eedport -keypass eedport -alias eed \
-    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=eed-port" >/dev/null 2>&1
-apksigner sign --ks "$KS" --ks-pass pass:eedport --key-pass pass:eedport --out "$DL/eed.apk" "$WORK/unsigned.apk"
+# signing key made with openssl (keytool needs a full Java install)
+command -v openssl >/dev/null || { echo "openssl missing: run  pkg install openssl-tool"; exit 1; }
+command -v apksigner >/dev/null || { echo "apksigner missing: run  pkg install apksigner"; exit 1; }
+if [ ! -f "$WORK/key.pk8" ]; then
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
+        -days 10000 -subj "/CN=eed-port"
+    openssl pkcs8 -topk8 -inform PEM -outform DER -nocrypt -in "$WORK/key.pem" -out "$WORK/key.pk8"
+fi
+apksigner sign --key "$WORK/key.pk8" --cert "$WORK/cert.pem" --out "$DL/eed.apk" "$WORK/unsigned.apk"
 echo
 echo "== done: $DL/eed.apk"
 echo "   Install it from your Files app, then: Settings > Apps > Ed, Edd n Eddy > allow 'All files access'."

@@ -13,6 +13,7 @@
 #include "disc.h"
 #include "irq.h"
 #include "gx_fifo.h"
+#include "modules.h"
 
 /* dolrecomp_call_depth is defined in cpu.c */
 
@@ -60,6 +61,8 @@ static void update_timebase(CPUState *cpu) {
     cpu->timebase = ns * 81ull / 2000ull; /* 40.5e6 / 1e9 */
 }
 
+static DolRecompFunction engine_find_impl(u32 a) { return dolrecomp_find_original(a); }
+
 static u32 be32(const unsigned char *p) { return (u32)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 
 static CPUState cpu;
@@ -78,6 +81,7 @@ static void dump_threads(CPUState *c) {
 
 static void on_alarm(int s) {
     (void)s;
+    if (getenv("EED_RAMDUMP")) { FILE *f = fopen(getenv("EED_RAMDUMP"), "wb"); if (f) { fwrite(cpu.ram, 1, cpu.ram_size, f); fclose(f); } }
     dump_threads(&cpu);
     fprintf(stderr, "[gx] cmds=%llu draws=%llu drawdone=%llu tokens=%llu vi_frames=%llu\n", gx_cmds, gx_draws, gx_draw_done, gx_tokens, vi_frames);
     hw_debug_dump();
@@ -97,6 +101,13 @@ int main(int argc, char **argv) {
     fclose(f);
 
     if (!cpu_init(&cpu)) { fprintf(stderr, "cpu_init failed\n"); return 1; }
+    /* 32 MB of guest RAM: the OS still sees 24 MB; 0x81800000+ holds pre-linked LU code. */
+    cpu.ram = realloc(cpu.ram, 32u << 20);
+    memset(cpu.ram + cpu.ram_size, 0, (32u << 20) - cpu.ram_size);
+    cpu.ram_size = 32u << 20;
+    engine_find = engine_find_impl;
+    cpu.host_call = module_host_call;
+    module_dir = getenv("EED_MODULES");
     cpu.external_read = hw_read;
     cpu.external_write = hw_write;
     cpu.spr_read = spr_read;

@@ -5,6 +5,8 @@
 #include <string.h>
 #include "hle.h"
 #include "irq.h"
+#include "modules.h"
+#include "alias.h"
 
 static void hle___OSInitAudioSystem(CPUState *cpu) {
     (void)cpu; /* DSP/ARAM bring-up not needed: audio will be produced natively. */
@@ -123,6 +125,23 @@ static void hle_OSRestoreInterrupts(CPUState *cpu) {
     cpu->gpr[3] = (cpu->msr >> 15) & 1;
     if (level) cpu->msr |= MSR_EE; else cpu->msr &= ~MSR_EE;
     if (level) hle_pc_set = irq_check_on_enable(cpu, cpu->lr);
+}
+
+/* LU code relocation: install pre-linked, recompiled module images instead (modules.c). */
+static void hle_LU_RelocateBatch(CPUState *cpu) { module_relocate_hook(cpu); }
+static void hle_LU_FixupModuleHeader(CPUState *cpu) { module_fixup_hook(cpu); }
+
+/* ---- Dolphin SDK VM library: virtual memory backed by ARAM with page faults.
+ * Replaced by host memory: VMAlloc'd ranges are always resident. ---- */
+static void hle_VMInit(CPUState *cpu) {
+    fprintf(stderr, "[vm] VMInit(page pool %u bytes, aram %08X, %u bytes): host-backed\n",
+            cpu->gpr[3], cpu->gpr[4], cpu->gpr[5]);
+}
+static void hle_VMAlloc(CPUState *cpu) {
+    u32 va = cpu->gpr[3], size = cpu->gpr[4];
+    int ok = host_region_add(va, size);
+    fprintf(stderr, "[vm] VMAlloc(%08X, 0x%X) -> %s\n", va, size, ok ? "host memory" : "FAILED");
+    cpu->gpr[3] = ok;
 }
 
 typedef void (*HleFn)(CPUState *);

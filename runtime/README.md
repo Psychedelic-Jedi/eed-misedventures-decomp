@@ -30,13 +30,18 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
 8. Interrupts: external (PI), decrementer (OS alarms), VI retrace at 60 Hz, PE finish/token.
    `OSDisable/Enable/RestoreInterrupts` are HLE'd so pending interrupts fire as soon as MSR[EE] is set. ✅
 9. GX command stream parsed (`gx_fifo.c`): BP/CP/XF/draw sizing from VCD/VAT; `GXDrawDone` completes. ✅
-10. **Next blockers** ⏳
-    - The engine jumps into LU code loaded in the heap (`0x80442CA4`) → implement the loader hook
-      (copy the pre-linked module from `gctool.py linkall` to its fixed address) and link module C into the runtime.
-    - The async file reader copies `en/lvloader.gc` to `0x7E000000` (not RAM): destination pointer comes from
-      an allocation/handle that isn't set up yet — investigate after modules run.
+10. LU code modules run recompiled: `LU_FixupModuleHeader` HLE installs the pre-linked image (from
+    `gctool.py linkall`, path in `$EED_MODULES`) and aliases the heap copy to it (`alias.h`), so pointers derived
+    from the pack (class descriptors) and from the header reach the same memory and recompiled code;
+    `LU_RelocateBatch` becomes a no-op. Cross-module calls go through `ctx->host_call` (`modules.c`). ✅
+11. Dolphin SDK **VM library** (ARAM-backed virtual memory, 14 MB at `0x7E000000`): `VMInit`/`VMAlloc` HLE'd,
+    the range is host memory (no page faults). ✅
+12. **`lvloader` (loading screen / language select) runs its frame loop at 60 fps**: ~1,500 frames,
+    ~8,000 draws in 25 s. ✅
+13. Next ⏳
+    - Renderer: turn the GX command stream into GLES draws (first visible frame).
+    - PAD/SI input (language select waits for a button).
+    - Null reads in `fn_800DCB38` (near Bink code).
 
-Run with a disc: `./build/recomp/boot_test main.dol 20 path/to/game.ciso` (or an extracted folder).
-At timeout the harness prints OS threads, GX counters and interrupt state.
-
-All 30 LU modules translate (814k instrs, 0 unknown) and compile (220 files); not yet linked into the runtime.
+Run: `EED_MODULES=path/to/linked_dols ./build/recomp/boot_test main.dol 20 path/to/game.ciso`
+Build with modules: `MODDOLS=path/to/linked_dols DOLRECOMP=... sh runtime/build.sh`

@@ -303,6 +303,8 @@ void plat_input_update(unsigned long long frame) {
     }
 }
 
+static void perf_frame(void);   /* defined with the CPU performance code below */
+
 /* ------------------------------------------------------------ presenting */
 static void draw_touch_controls(void) {
     if (!g_show_touch) return;

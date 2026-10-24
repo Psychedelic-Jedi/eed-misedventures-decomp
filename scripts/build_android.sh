@@ -143,12 +143,16 @@ clang --target=aarch64-linux-android26 -shared -o "$WORK/apk/lib/arm64-v8a/libee
     /system/lib64/libandroid.so /system/lib64/libEGL.so /system/lib64/libGLESv2.so /system/lib64/liblog.so \
     -lm -Wl,-z,max-page-size=16384 -Wl,--gc-sections
 echo "   libeed.so: $(du -h "$WORK/apk/lib/arm64-v8a/libeed.so" | cut -f1)"
-if command -v llvm-readelf >/dev/null && llvm-readelf -d "$WORK/apk/lib/arm64-v8a/libeed.so" | grep -q com.termux; then
-    echo "   warning: libeed.so references Termux paths"
-fi
+echo "   dependencies:"
+llvm-readelf -d "$WORK/apk/lib/arm64-v8a/libeed.so" 2>/dev/null | grep -E "NEEDED|RPATH|RUNPATH" | sed 's/^/     /' || true
 
 JAR=$PREFIX/share/aapt/android.jar
-aapt2 link -o "$WORK/base.apk" --manifest "$ROOT/runtime/android/AndroidManifest.xml" -I "$JAR"
+rm -f "$WORK/base.apk"
+if command -v aapt >/dev/null; then
+    aapt package -f -M "$ROOT/runtime/android/AndroidManifest.xml" -I "$JAR" -F "$WORK/base.apk"
+else
+    aapt2 link -o "$WORK/base.apk" --manifest "$ROOT/runtime/android/AndroidManifest.xml" -I "$JAR"
+fi
 python3 "$ROOT/tools/apk_pack.py" "$WORK/base.apk" "$WORK/unsigned.apk" "lib/arm64-v8a/libeed.so=$WORK/apk/lib/arm64-v8a/libeed.so"
 KS=$WORK/eed.keystore
 [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass eedport -keypass eedport -alias eed \

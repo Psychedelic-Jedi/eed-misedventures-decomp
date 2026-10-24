@@ -28,3 +28,45 @@ SHA-1 `94afc1057b78917c66ca37251ee998d5840dfd12`, entry `0x8000E1DC`.
 ## Split notes
 - `_rom_copy_info` begins at `0x8000E4E0` with two entries for the low sections; named `_rom_copy_info_low` to keep dtk happy.
 - The compiler download (files.decomp.dev) is needed for matching builds; not required for porting.
+
+## Code size survey (all 30 LU code modules)
+
+```
+total instrs 813855  after removing duplicates 587045  unique fns 4397
+functions in >= 12 of 12 levels: 35 fns, 2801 instrs
+functions in >= 6 of 12 levels: 91 fns, 10733 instrs
+functions in >= 2 of 12 levels: 290 fns, 49600 instrs
+gbl_api     179947 instrs,  173473 unique to this module
+global      172420 instrs,  164678 unique to this module
+pphub1       41833 instrs,   15877 unique to this module
+w01m1_3      41600 instrs,   14649 unique to this module
+w01m1_1      40748 instrs,   18156 unique to this module
+w02m2_1      37421 instrs,   13573 unique to this module
+w01m1_3b     37415 instrs,   14620 unique to this module
+w02m2_2      37161 instrs,   16321 unique to this module
+w02m2_3b     35261 instrs,   12973 unique to this module
+w02m2_3a     33337 instrs,   12615 unique to this module
+w01m1_2      30590 instrs,    8269 unique to this module
+w01m1_4      29719 instrs,   16257 unique to this module
+w01m1_2b     28722 instrs,   12921 unique to this module
+mainmenu     28385 instrs,   27942 unique to this module
+w02m2_4      27379 instrs,   17661 unique to this module
+lvloader      3367 instrs,    3233 unique to this module
+bnk_plr       1997 instrs,    1785 unique to this module
+intro          806 instrs,     756 unique to this module
+ls_w2m2        479 instrs,     129 unique to this module
+ls_w1m3        479 instrs,     129 unique to this module
+ls_intro       479 instrs,     129 unique to this module
+ls_w1m3b       479 instrs,     129 unique to this module
+ls_w1m4        479 instrs,     129 unique to this module
+ls_w2m3a       479 instrs,     129 unique to this module
+ls_w2m3b       479 instrs,     129 unique to this module
+ls_w1m2        479 instrs,     129 unique to this module
+ls_hub1        479 instrs,     129 unique to this module
+ls_w2m4        479 instrs,     129 unique to this module
+ls_w2m1        479 instrs,     129 unique to this module
+ls_w1m1        478 instrs,     128 unique to this module
+```
+
+main.dol engine code (0x8000FD40-0x80121FC0) is ~280k instructions. Combined unique code to decompile (excluding SDK/Havok/libs): ~870k instructions.
+Exact duplicates were detected by hashing function bytes with relocated fields zeroed; near-duplicates (same source, different struct offsets) are not counted, so real sharing is higher.

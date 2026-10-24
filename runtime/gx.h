@@ -11,7 +11,7 @@ typedef struct {
     u32 array_base[16], array_stride[16];
     u32 matidx_a, matidx_b;          /* CP copies of XF 0x1018/0x1019 */
     /* XF (transform unit) */
-    float xfmem[0x600];              /* 0x000-0x3FF pos/tex matrices, 0x400 normal, 0x500 post */
+    float xfmem[0x680];              /* 0x000-0x3FF pos/tex matrices, 0x400 normal, 0x500 post, 0x600 lights */
     u32 xfreg[0x100];                /* XF registers 0x1000-0x10FF */
     /* BP (pixel pipeline) */
     u32 bp[0x100];

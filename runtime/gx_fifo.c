@@ -84,7 +84,7 @@ static void load_cp(u8 reg, u32 v) {
 static void load_xf(u32 addr, const u8 *data, u32 count) {
     for (u32 i = 0; i < count; i++, addr++) {
         u32 w = be32(data + i * 4);
-        if (addr < 0x600) memcpy(&gx.xfmem[addr], &w, 4);
+        if (addr < 0x680) memcpy(&gx.xfmem[addr], &w, 4);
         else if (addr >= 0x1000 && addr < 0x1100) gx.xfreg[addr - 0x1000] = w;
     }
 }
@@ -96,7 +96,7 @@ static void load_indexed(u8 op, u32 v) {
     u32 src = (gx.array_base[array] + index * gx.array_stride[array]) | 0x80000000u;
     for (u32 i = 0; i < size; i++) {
         u32 w = mem_read32(gx_cpu, src + i * 4);
-        if (addr + i < 0x600) memcpy(&gx.xfmem[addr + i], &w, 4);
+        if (addr + i < 0x680) memcpy(&gx.xfmem[addr + i], &w, 4);
     }
 }
 

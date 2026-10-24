@@ -54,7 +54,11 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
 17. Memory card: CARD library replaced by host files (`card.c`, folder `$EED_MEMCARD`). The game finds a
     59-block card, offers to create save data, and New Game proceeds: global, pphub1 and bnk_plr modules load,
     then the first scam's movie and the World 1 Mission 1 loading screen are requested. ✅
-18. Next ⏳
+18. **In-game**: Scam 1 "Cool Yer Ed" (w01m1_1) loads and runs — backyard level, HUD, objective/pause
+    screens, the three Eds animated. Renderer additions: hardware lighting (8 lights, spot/spec/dir attenuation,
+    diffuse functions), texgen from normals/colours + dual-tex post transform, face culling. ✅
+19. Next ⏳
+    - Dark triangle patches on characters (toon ramp / depth precision).
     - Lighting (XF light units) for correct colours.
     - GLES backend for Android reusing the decode/TEV front half.
     - PAD/SI input (language select waits for a button).

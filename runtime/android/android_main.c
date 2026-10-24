@@ -7,12 +7,16 @@
  *   "All files access" (Settings > Apps > Ed, Edd n Eddy > Permissions).
  * - stderr goes to Download/eed_log.txt for troubleshooting.
  */
+#define _GNU_SOURCE   /* sched_setaffinity, CPU_SET */
 #include <android/input.h>
 #include <android/log.h>
 #include <android/looper.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
 #include <dirent.h>
+#include <dlfcn.h>
+#include <sched.h>
+#include <sys/resource.h>
 #include <fcntl.h>
 #include <jni.h>
 #include <math.h>
@@ -347,6 +351,7 @@ static void present_texture(GLuint tex, float u0, float v0, float du, float dv) 
 }
 
 void plat_present_frame(const u8 *rgba, int stride, int x, int y, int w, int h) {
+    perf_frame();
     if (!gl_ensure_surface()) return;
     glBindTexture(GL_TEXTURE_2D, g_tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
@@ -359,6 +364,7 @@ void plat_present_frame(const u8 *rgba, int stride, int x, int y, int w, int h) 
 
 /* GLES backend: the EFB texture is bottom-up (GL convention); region given top-down. */
 void plat_present_gl(unsigned tex, int tex_w, int tex_h, int x, int y, int w, int h) {
+    perf_frame();
     if (!gl_ensure_surface()) return;
     present_texture(tex, (float)x / tex_w, 1.0f - (float)(y + h) / tex_h, (float)w / tex_w, (float)h / tex_h);
 }
@@ -460,6 +466,81 @@ static void show_error_screen(float r, float g, float b) {
     }
 }
 
+/* ------------------------------------------------------------ CPU performance
+ * The recompiled game is one thread; its speed is set by the core it runs on.
+ * Pin it to the fastest core(s) (read from cpufreq, so it adapts to any SoC: on the
+ * Exynos 2400 that is the Cortex-X4), raise its priority, and use Android's
+ * performance hint API (ADPF, Android 13+) so the governor keeps clocks up while
+ * frames are late instead of reacting slowly. */
+#ifndef EED_BUILD_ID
+#define EED_BUILD_ID "dev"
+#endif
+static long cpu_max_khz(int c) {
+    char p[96];
+    snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c);
+    FILE *f = fopen(p, "r");
+    long v = -1;
+    if (f) { if (fscanf(f, "%ld", &v) != 1) v = -1; fclose(f); }
+    return v;
+}
+typedef void *(*PH_getManager)(void);
+typedef void *(*PH_createSession)(void *, const int32_t *, size_t, int64_t);
+typedef int (*PH_report)(void *, int64_t);
+static void *g_hint_session;
+static PH_report g_hint_report;
+static int64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec; }
+
+static void perf_setup(void) {
+    long best = -1, khz[32];
+    int ncpu = 0;
+    for (int c = 0; c < 32; c++) { khz[c] = cpu_max_khz(c); if (khz[c] < 0) break; ncpu = c + 1; if (khz[c] > best) best = khz[c]; }
+    if (best > 0) {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        char list[128] = "";
+        for (int c = 0; c < ncpu; c++)
+            if (khz[c] == best) { CPU_SET(c, &set); snprintf(list + strlen(list), sizeof list - strlen(list), " %d", c); }
+        int r = sched_setaffinity(0, sizeof set, &set);
+        fprintf(stderr, "[perf] %d CPUs, fastest %ld MHz on cpu%s; pinned: %s\n", ncpu, best / 1000, list, r ? "no" : "yes");
+    }
+    int pr = setpriority(PRIO_PROCESS, 0, -10);
+    fprintf(stderr, "[perf] thread priority -10: %s\n", pr ? "denied" : "ok");
+    void *lib = dlopen("libandroid.so", RTLD_NOW);
+    PH_getManager gm = lib ? (PH_getManager)dlsym(lib, "APerformanceHint_getManager") : NULL;
+    PH_createSession cs = lib ? (PH_createSession)dlsym(lib, "APerformanceHint_createSession") : NULL;
+    g_hint_report = lib ? (PH_report)dlsym(lib, "APerformanceHint_reportActualWorkDuration") : NULL;
+    if (gm && cs && g_hint_report) {
+        void *m = gm();
+        int32_t tid = gettid();
+        g_hint_session = m ? cs(m, &tid, 1, 33333333) : NULL;    /* the game runs at 30 fps */
+    }
+    fprintf(stderr, "[perf] performance hint session: %s\n", g_hint_session ? "on" : "unavailable");
+}
+
+/* Report each frame's busy time (frame time minus idle-loop sleeping). */
+extern unsigned long long idle_sleep_ns;
+static void perf_frame(void) {
+    static int64_t last;
+    static unsigned long long last_idle;
+    static int frames;
+    static int64_t window_start;
+    int64_t t = now_ns();
+    if (last && g_hint_session) {
+        int64_t busy = (t - last) - (int64_t)(idle_sleep_ns - last_idle);
+        if (busy < 1000000) busy = 1000000;
+        g_hint_report(g_hint_session, busy);
+    }
+    last = t;
+    last_idle = idle_sleep_ns;
+    if (!window_start) window_start = t;
+    if (++frames == 300) {                     /* periodic fps line in the log */
+        double sec = (t - window_start) / 1e9;
+        fprintf(stderr, "[perf] %.1f fps over the last %d frames\n", frames / sec, frames);
+        frames = 0;
+        window_start = t;
+    }
+}
+
 static void *game_thread(void *arg) {
     (void)arg;
     g_looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
@@ -475,8 +556,9 @@ static void *game_thread(void *arg) {
         if (fd >= 0) { dup2(fd, 2); close(fd); }
         else LOGI("cannot write log to Download/ (grant All files access)");
         setvbuf(stderr, NULL, _IONBF, 0);
-        fprintf(stderr, "[android] eedport log, pid %d\n", (int)getpid());
+        fprintf(stderr, "[android] eedport log, pid %d, build %s\n", (int)getpid(), EED_BUILD_ID);
     }
+    perf_setup();
     int g = storage_granted();
     fprintf(stderr, "[android] all-files access: %s\n", g == 1 ? "granted" : g == 0 ? "NOT granted" : "unknown");
     if (g == 0) {

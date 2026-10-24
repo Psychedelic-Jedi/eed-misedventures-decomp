@@ -157,7 +157,7 @@ int eed_core_init(const u8 *d, u32 dol_len, const char *disc_path) {
 /* The OS idle loop (SelectThread spinning while no thread is ready): instead of
  * burning a host core, sleep until the next timed event that could wake a thread. */
 #define OS_IDLE_LOOP_PC 0x80149BE8u
-unsigned long long idle_sleeps;
+unsigned long long idle_sleeps, idle_sleep_ns;
 static void idle_wait(CPUState *c) {
     if (c->pc != OS_IDLE_LOOP_PC || !(c->msr & 0x8000u) || hw_interrupt_pending()) return;
     if (mem_read32(c, c->gpr[13] - 20408) != 0) return;     /* run queue not empty */
@@ -169,6 +169,7 @@ static void idle_wait(CPUState *c) {
     struct timespec ts = {0, (long)ns};
     nanosleep(&ts, NULL);
     idle_sleeps++;
+    idle_sleep_ns += ns;
 }
 
 int eed_core_run(volatile int *stop) {

@@ -9,6 +9,8 @@
 #   3. pre-link LU code modules (gctool.py linkall)
 #   4. recompile PowerPC -> C (main.dol with HLE patches, 30 modules)
 #   5. compile everything with clang for arm64 (JOBS=4 by default; ~1 hour first time)
+#      Runtime: -O3 tuned for the CPU (TUNE, default -mcpu=cortex-x4).
+#      Game code: OPT (default -O1) and GEN_TUNE; changing them recompiles all game code.
 #   6. link libeed.so and package + sign the APK -> Download/eed.apk
 #
 # Nothing derived from the game leaves your phone. Needs:
@@ -24,6 +26,15 @@ export PATH="$PATH:$HOME/.cargo/bin"
 DISC=${1:-$(ls "$DL"/*.ciso "$DL"/*.iso 2>/dev/null | head -1)}
 [ -f "$DISC" ] || { echo "No disc image given or found in Download/"; exit 1; }
 mkdir -p "$WORK"
+rm -f "$DL/eed.apk"     # never leave an old APK around if this build fails
+BUILD_ID="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown) $(date +%Y-%m-%d_%H:%M)"
+# CPU tuning: this APK is built for the phone it's built on. Cortex-X4 (Exynos 2400,
+# Snapdragon 8 Gen 3, Dimensity 9300) by default; override with TUNE=... or TUNE= to disable.
+TUNE=${TUNE--mcpu=cortex-x4}
+if [ -n "$TUNE" ] && ! echo 'int x;' | clang --target=aarch64-linux-android26 $TUNE -x c -c - -o /dev/null 2>/dev/null; then
+    echo "   (clang doesn't know $TUNE, building without CPU tuning)"; TUNE=""
+fi
+echo "== build: $BUILD_ID  tune: ${TUNE:-none}  game code: $OPT"
 echo "== disc: $DISC"
 echo "== work: $WORK (jobs: $JOBS)"
 
@@ -80,8 +91,14 @@ done < "$WORK/moddols/layout.txt"
 
 # ---------------------------------------------------------------- 5. compile
 echo "== [5/6] compiling (this is the long part; safe to re-run if interrupted)"
-CC="clang --target=aarch64-linux-android26 -fPIC $OPT -w"
+CC="clang --target=aarch64-linux-android26 -fPIC $OPT $GEN_TUNE -w"
 mkdir -p "$WORK/obj"
+# Rebuild all game code when its compiler flags change (e.g. OPT=-O2 GEN_TUNE=-mcpu=cortex-x4)
+if [ -f "$WORK/obj/.flags" ] && [ "$(cat "$WORK/obj/.flags")" != "$CC" ]; then
+    echo "   compiler flags changed: recompiling all game code"
+    rm -f "$WORK"/obj/*.o
+fi
+echo "$CC" > "$WORK/obj/.flags"
 {
     for c in "$WORK"/dol/generated/chunks/*.c "$WORK/dol/generated/generated.c"; do
         o="$WORK/obj/main_$(basename "$c" .c).o"
@@ -108,11 +125,11 @@ s = '#include "alias.h"\n' + s.replace(hook, hook + "\n    { u8 *fp = page_fast(
 open(sys.argv[2], "w").write(s)
 PY
 RT="$ROOT/runtime"
-RCC="clang --target=aarch64-linux-android26 -fPIC -O2 -I$DR/src -I$DR/src/cpu -I$WORK/dol/generated -I$WORK -I$RT"
+RCC="clang --target=aarch64-linux-android26 -fPIC -O3 $TUNE -I$DR/src -I$DR/src/cpu -I$WORK/dol/generated -I$WORK -I$RT"
 mkdir -p "$WORK/rt"
 for f in core hle hw disc irq gx_fifo gx_render gx_gles modules input card; do $RCC -c "$RT/$f.c" -o "$WORK/rt/$f.o"; done
 $RCC -w -c "$WORK/cpu_alias.c" -o "$WORK/rt/cpu.o"
-$RCC -c "$RT/android/android_main.c" -o "$WORK/rt/android_main.o"
+$RCC -DEED_BUILD_ID="\"$BUILD_ID\"" -c "$RT/android/android_main.c" -o "$WORK/rt/android_main.o"
 
 # embedded data: main.dol + pre-linked modules
 {

@@ -92,10 +92,38 @@ static void di_execute(CPUState *cpu) {
     put(DISR, get(DISR, 4) | DI_TCINT, 4);
 }
 
+/* ---- ARAM (16 MB auxiliary RAM) + its DMA engine (DSP registers 0x5020-0x502A) ---- */
+#define ARAM_SIZE (16u << 20)
+static u8 *g_aram;
+#define DSP_CSR 0x500A
+#define CSR_AIDINT 0x08u
+#define CSR_AIDMSK 0x10u
+#define CSR_ARINT  0x20u
+#define CSR_ARMSK  0x40u
+#define CSR_DSPINT 0x80u
+#define CSR_DSPMSK 0x100u
+int aram_trace = 0;
+
+static void aram_dma(CPUState *cpu) {
+    if (!g_aram) g_aram = calloc(1, ARAM_SIZE);
+    u32 mm = ((u32)get(0x5020, 4) & 0x03FFFFE0u) | 0x80000000u;
+    u32 ar = (u32)get(0x5024, 4) & (ARAM_SIZE - 1) & ~31u;
+    u32 cnt = (u32)get(0x5028, 4);
+    u32 n = cnt & 0x7FFFFFE0u, to_mram = cnt >> 31;
+    if (aram_trace) fprintf(stderr, "[aram] %s mram %08X aram %07X len 0x%X\n", to_mram ? "ARAM->MRAM" : "MRAM->ARAM", mm, ar, n);
+    for (u32 i = 0; i < n && ar + i < ARAM_SIZE; i++) {
+        if (to_mram) mem_write8(cpu, mm + i, g_aram[ar + i]);
+        else g_aram[ar + i] = mem_read8(cpu, mm + i);
+    }
+    put(0x5028, cnt & 0x80000000u, 4);                  /* count reads back 0 when done */
+    put(DSP_CSR, get(DSP_CSR, 2) | CSR_ARINT, 2);       /* ARAM DMA complete */
+}
+
 /* PI interrupt cause register, computed from device state. */
 #define PI_INTSR 0x3000
 #define PI_INTMR 0x3004
 #define PI_DI    0x00000004u
+#define PI_DSP   0x00000040u
 #define PI_VI    0x00000100u
 #define PI_PE_TOKEN  0x00000200u
 #define PI_PE_FINISH 0x00000400u
@@ -107,7 +135,10 @@ static void di_execute(CPUState *cpu) {
 #define VI_ENB   0x10000000u
 #define PI_RSWST 0x00010000u  /* reset switch not pressed */
 static u32 pi_cause(void) {
-    u32 c = (u32)get(PI_INTSR, 4) & ~(PI_DI | PI_VI | PI_PE_TOKEN | PI_PE_FINISH);
+    u32 c = (u32)get(PI_INTSR, 4) & ~(PI_DI | PI_VI | PI_PE_TOKEN | PI_PE_FINISH | PI_DSP);
+    u32 csr = (u32)get(DSP_CSR, 2);
+    if (((csr & CSR_ARINT) && (csr & CSR_ARMSK)) || ((csr & CSR_AIDINT) && (csr & CSR_AIDMSK)) ||
+        ((csr & CSR_DSPINT) && (csr & CSR_DSPMSK))) c |= PI_DSP;
     u32 pe = (u32)get(PE_CTRL, 2);
     if (pe_token_pending && (pe & 1)) c |= PI_PE_TOKEN;
     if (pe_finish_pending && (pe & 2)) c |= PI_PE_FINISH;
@@ -182,6 +213,11 @@ void hw_write(CPUState *cpu, u32 ea, u64 v, u8 size) {
         g_logged++;
         fprintf(stderr, "[mmio] W%u %08X (%s) = %llX pc=%08X\n", size * 8, ea, hw_name(ea),
                 (unsigned long long)v, cpu->pc);
+    }
+    if ((size == 2 && off == 0x502A) || (size == 4 && off == 0x5028)) {
+        put(off, v, size);
+        aram_dma(cpu);
+        return;
     }
     if (size == 2 && off == PE_CTRL) {      /* status bits are write-1-to-clear */
         if (v & 4) pe_token_pending = 0;

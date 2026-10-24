@@ -45,7 +45,14 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
     TEV combiner, alpha test, blending, depth, scissor, EFB->XFB copies. Frames: `EED_FRAMES=dir` (PPM). ✅
 14. Controller input: `PADRead` HLE fed by `input.c` (scripted via `EED_INPUT` for headless tests; SDL later).
     Pressing A on the language select makes the game load the next loading screen (`ls_intro`). ✅
-15. Next ⏳
+15. ARAM (16 MB) + ARAM DMA with DSP interrupts; sound banks load. ✅
+16. **Boot flow reaches the main menu**: Licensed by Nintendo → language select → autosave notice →
+    memory card prompts → Bink/Havok logos → legal screen → **title screen (PRESS START)** → **main menu**
+    (New Game / Load Game / Credits). Modules loaded: lvloader, ls_intro, gbl_api, intro, ls_hub1, mainmenu. ✅
+    Test input: `EED_INPUT="300-310:A,700-710:A,950-1100:DOWN,1300-1310:A,1500-1600:UP,1750-1760:A,2400-2410:START"`
+17. Next ⏳
+    - Memory card (CARD library / EXI device → host save file): New Game requires it.
+    - Lighting (XF light units) for correct colours.
     - GLES backend for Android reusing the decode/TEV front half.
     - PAD/SI input (language select waits for a button).
     - Null reads in `fn_800DCB38` (near Bink code).

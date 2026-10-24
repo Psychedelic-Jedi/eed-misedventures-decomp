@@ -66,7 +66,8 @@ $CC -O1 -Wall -c $INC "$HERE/hw.c" -o "$OUT/hw.o"
 $CC -O1 -Wall -c $INC "$HERE/disc.c" -o "$OUT/disc.o"
 $CC -O1 -Wall -c $INC "$HERE/irq.c" -o "$OUT/irq.o"
 $CC -O2 -Wall -c $INC "$HERE/gx_fifo.c" -o "$OUT/gx_fifo.o"
+$CC -O2 -Wall -c $INC "$HERE/gx_render.c" -o "$OUT/gx_render.o"
 $CC -O1 -Wall -c $INC "$HERE/modules.c" -o "$OUT/modules.o"
 $CC -O1 -Wall -c $INC "$HERE/boot_test.c" -o "$OUT/boot_test.o"
-$CC -o "$OUT/boot_test" "$OUT/boot_test.o" "$OUT/hle.o" "$OUT/hw.o" "$OUT/disc.o" "$OUT/irq.o" "$OUT/gx_fifo.o" "$OUT/modules.o" "$OUT/cpu.o" "$OUT"/obj/*.o $MODOBJS -lm
+$CC -o "$OUT/boot_test" "$OUT/boot_test.o" "$OUT/hle.o" "$OUT/hw.o" "$OUT/disc.o" "$OUT/irq.o" "$OUT/gx_fifo.o" "$OUT/gx_render.o" "$OUT/modules.o" "$OUT/cpu.o" "$OUT"/obj/*.o $MODOBJS -lm
 echo "built $OUT/boot_test"

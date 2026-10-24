@@ -13,6 +13,7 @@
 #include "disc.h"
 #include "irq.h"
 #include "gx_fifo.h"
+#include "gx.h"
 #include "modules.h"
 
 /* dolrecomp_call_depth is defined in cpu.c */
@@ -83,7 +84,7 @@ static void on_alarm(int s) {
     (void)s;
     if (getenv("EED_RAMDUMP")) { FILE *f = fopen(getenv("EED_RAMDUMP"), "wb"); if (f) { fwrite(cpu.ram, 1, cpu.ram_size, f); fclose(f); } }
     dump_threads(&cpu);
-    fprintf(stderr, "[gx] cmds=%llu draws=%llu drawdone=%llu tokens=%llu vi_frames=%llu\n", gx_cmds, gx_draws, gx_draw_done, gx_tokens, vi_frames);
+    fprintf(stderr, "[gx] cmds=%llu draws=%llu drawdone=%llu tokens=%llu vi_frames=%llu xfb_copies=%llu\n", gx_cmds, gx_draws, gx_draw_done, gx_tokens, vi_frames, gx_frames);
     hw_debug_dump();
     fprintf(stderr, "[cpu] msr=%08X\n", cpu.msr);
     fprintf(stderr, "\n[timeout] pc=%08X lr=%08X r1=%08X mmio R=%llu W=%llu irqs=%llu\n", cpu.pc, cpu.lr,
@@ -108,6 +109,8 @@ int main(int argc, char **argv) {
     engine_find = engine_find_impl;
     cpu.host_call = module_host_call;
     module_dir = getenv("EED_MODULES");
+    gx_cpu = &cpu;
+    gx_render_init();
     cpu.external_read = hw_read;
     cpu.external_write = hw_write;
     cpu.spr_read = spr_read;

@@ -9,6 +9,7 @@ it will become the Android runtime (SDL + Aurora).
 | `hw.c` | Minimal MMIO register model for `0xCC000000` (read-back registers + "always ready" quirks), with deduplicated access logging. |
 | `hle.c`, `hle_list.txt` | Native replacements for SDK functions. `tools/hle_patch.py` marks each listed function's first instruction with `mfspr r0, HID0`, which DolRecomp routes to the instruction fallback → `hle_dispatch()`. |
 | `disc.c` | Disc reader for DVD emulation: plain ISO/GCM, CISO, or an extracted folder mapped through `sys/fst.bin`. |
+| `gx_fifo.c`, `gx_render.c`, `gx.h` | GX command processor (BP/CP/XF state, display lists, PE interrupts) and software renderer. |
 | `build.sh` | Patch → DolRecomp → incremental compile (only changed chunks) → link `build/recomp/boot_test`. |
 
 ## Build & run (Linux, from repo root)
@@ -38,8 +39,11 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
     the range is host memory (no page faults). ✅
 12. **`lvloader` (loading screen / language select) runs its frame loop at 60 fps**: ~1,500 frames,
     ~8,000 draws in 25 s. ✅
-13. Next ⏳
-    - Renderer: turn the GX command stream into GLES draws (first visible frame).
+13. **First rendered frame** (software reference renderer `gx_render.c`): vertex decode incl. indexed arrays and
+    display lists, XF transform/projection/viewport, all GX texture formats (incl. CMPR, palettes via TMEM),
+    TEV combiner, alpha test, blending, depth, scissor, EFB->XFB copies. Frames: `EED_FRAMES=dir` (PPM). ✅
+14. Next ⏳
+    - GLES backend for Android reusing the decode/TEV front half.
     - PAD/SI input (language select waits for a button).
     - Null reads in `fn_800DCB38` (near Bink code).
 

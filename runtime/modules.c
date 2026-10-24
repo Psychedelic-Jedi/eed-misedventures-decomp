@@ -13,6 +13,7 @@
 #include <string.h>
 #include "modules.h"
 #include "alias.h"
+#include "core.h"
 #include "platform.h"
 
 typedef DolRecompFunction (*FindFn)(u32);
@@ -41,6 +42,7 @@ int host_region_add(u32 base, u32 size) {
     u8 *m = calloc(1, size);
     if (!m) return 0;
     g_host_region[g_host_region_count++] = (HostRegion){base, size, m};
+    page_table_rebuild();
     return 1;
 }
 
@@ -52,6 +54,7 @@ int g_alias_count;
 static void alias_remove(CPUState *cpu, int i) {
     MemAlias a = g_alias[i];
     g_alias[i] = g_alias[--g_alias_count];
+    page_table_rebuild();
     u8 *tmp = malloc(a.size);
     MemAlias saved = a;
     for (u32 j = 0; j < a.size; j++) {         /* read via the (now removed) target */
@@ -69,6 +72,33 @@ void alias_add(CPUState *cpu, u32 from, u32 to, u32 size) {
     }
     if (g_alias_count == MAX_ALIASES) alias_remove(cpu, 0);
     g_alias[g_alias_count++] = (MemAlias){from, to, size};
+    page_table_rebuild();
+}
+
+u8 **g_page;
+void page_table_rebuild(void) {
+    if (!g_page && !(g_page = calloc(1u << 20, sizeof *g_page))) return;
+    memset(g_page, 0, (1u << 20) * sizeof *g_page);
+    if (!cpu.ram) return;
+    for (u32 seg = 0; seg < 2; seg++) {               /* cached 0x80.., uncached 0xC0.. */
+        u32 base = seg ? 0xC0000000u : 0x80000000u;
+        for (u32 off = 0; off < cpu.ram_size; off += 0x1000) {
+            u32 a = base + off, lo = off, hi = off + 0x1000;
+            u8 *p = cpu.ram + off;
+            for (int i = 0; i < g_alias_count && p; i++) {
+                u32 f = g_alias[i].from & 0x3FFFFFFFu, t = g_alias[i].to & 0x3FFFFFFFu, n = g_alias[i].size;
+                if (hi <= f || lo >= f + n) continue;          /* untouched */
+                if (lo >= f && hi <= f + n && t + (lo - f) + 0x1000 <= cpu.ram_size)
+                    p = cpu.ram + t + (lo - f);               /* whole page aliased */
+                else p = 0;                                    /* partial: slow path */
+            }
+            g_page[a >> 12] = p;
+        }
+    }
+    for (int i = 0; i < g_host_region_count; i++)
+        for (u32 off = 0; off + 0x1000 <= g_host_region[i].size; off += 0x1000)
+            if (!((g_host_region[i].base + off) & 0xFFF))
+                g_page[(g_host_region[i].base + off) >> 12] = g_host_region[i].mem + off;
 }
 
 static int nmods(void) { return (int)(sizeof k_mods / sizeof k_mods[0]) - 1; }

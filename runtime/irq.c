@@ -45,6 +45,8 @@ void dec_write(CPUState *cpu, u32 v) {
     g_dec_tb = cpu->timebase;
     g_dec_armed = 1;
 }
+/* Time base value at which the decrementer fires (0 if not armed). */
+u64 dec_next_tb(void) { return g_dec_armed ? g_dec_tb + (u64)g_dec_value + 1 : 0; }
 static int dec_pending(CPUState *cpu) { return g_dec_armed && (s32)dec_read(cpu) < 0; }
 
 /* Called at block boundaries: deliver the highest-priority pending interrupt. */

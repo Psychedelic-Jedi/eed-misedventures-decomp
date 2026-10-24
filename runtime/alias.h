@@ -30,3 +30,15 @@ static inline u8 *host_region_resolve(u32 addr, u32 *avail) {
     return 0;
 }
 int host_region_add(u32 base, u32 size);
+
+/* Fast path: host pointer for each 4 KB guest page (NULL = take the slow path:
+ * MMIO, unmapped, or a page only partly covered by an alias). Rebuilt whenever
+ * aliases or host regions change. */
+extern u8 **g_page;
+void page_table_rebuild(void);
+static inline u8 *page_fast(u32 addr, u32 *avail) {
+    u8 *p = g_page ? g_page[addr >> 12] : 0;
+    u32 o = addr & 0xFFF;
+    if (p && o <= 0xFF8) { *avail = 0x1000 - o; return p + o; }
+    return 0;
+}

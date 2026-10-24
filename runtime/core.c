@@ -16,6 +16,7 @@
 #include "gx.h"
 #include "modules.h"
 #include "core.h"
+#include "alias.h"
 
 /* dolrecomp_call_depth is defined in cpu.c */
 
@@ -97,6 +98,7 @@ int eed_core_init(const u8 *d, u32 dol_len, const char *disc_path) {
     cpu.ram = realloc(cpu.ram, 32u << 20);
     memset(cpu.ram + cpu.ram_size, 0, (32u << 20) - cpu.ram_size);
     cpu.ram_size = 32u << 20;
+    page_table_rebuild();
     engine_find = engine_find_impl;
     cpu.host_call = module_host_call;
     gx_cpu = &cpu;
@@ -152,6 +154,23 @@ int eed_core_init(const u8 *d, u32 dol_len, const char *disc_path) {
 }
 
 /* Runs until *stop becomes non-zero or the guest stops. Returns 0 on request, -1 on guest error. */
+/* The OS idle loop (SelectThread spinning while no thread is ready): instead of
+ * burning a host core, sleep until the next timed event that could wake a thread. */
+#define OS_IDLE_LOOP_PC 0x80149BE8u
+unsigned long long idle_sleeps;
+static void idle_wait(CPUState *c) {
+    if (c->pc != OS_IDLE_LOOP_PC || !(c->msr & 0x8000u) || hw_interrupt_pending()) return;
+    if (mem_read32(c, c->gpr[13] - 20408) != 0) return;     /* run queue not empty */
+    u64 deadline = hw_next_tick_tb(), d = dec_next_tb();
+    if (d && d < deadline) deadline = d;
+    if (deadline <= c->timebase) return;
+    u64 ns = (deadline - c->timebase) * 2000ull / 81ull;
+    if (ns > 4000000) ns = 4000000;                          /* never oversleep a lot */
+    struct timespec ts = {0, (long)ns};
+    nanosleep(&ts, NULL);
+    idle_sleeps++;
+}
+
 int eed_core_run(volatile int *stop) {
     unsigned long long blocks = 0;
     clock_gettime(CLOCK_MONOTONIC, &g_t0);
@@ -159,7 +178,12 @@ int eed_core_run(volatile int *stop) {
         cpu.downcount = 0;
         update_timebase(&cpu);
         hw_tick(&cpu);
-        irq_poll(&cpu);
+        if (!irq_poll(&cpu)) {
+            idle_wait(&cpu);
+            update_timebase(&cpu);
+            hw_tick(&cpu);
+            irq_poll(&cpu);
+        }
         if (!dolrecomp_call(&cpu, cpu.pc)) {
             fprintf(stderr, "[stop] no code at pc=%08X lr=%08X after %llu blocks\n", cpu.pc, cpu.lr, blocks);
             return -1;

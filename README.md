@@ -10,7 +10,10 @@ This repository contains **no game assets or code**. You need your own legally d
 - [x] Reverse the `.gc` pack format; `tools/gctool.py` converts level code modules to ELF
 - [ ] Identify and name engine (Chimera) subsystems
 - [ ] Decompile engine code
-- [ ] Android port (SDL2 + GX→GLES via Aurora, Havok replacement)
+- [x] Static recompilation (DolRecomp) of main.dol and all 30 level code modules, with an HLE runtime (`runtime/`)
+- [x] Android APK built entirely on the phone in Termux (`scripts/build_android.sh`); boots into gameplay
+- [x] GPU renderer: GX raster pipeline on OpenGL ES (`runtime/gx_gles.c`): TEV as generated shaders, texture cache, EFB at 2x on Android
+- [ ] EFB copy-to-texture effects, lines/points, audio (AX), Bink video
 
 ## Setup
 

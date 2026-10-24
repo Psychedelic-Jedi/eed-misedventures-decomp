@@ -57,7 +57,7 @@ import sys
 s = open(sys.argv[1]).read()
 hook = "static u8* resolve_addr(CPUState* cpu, u32 addr, u32* avail) {"
 assert hook in s, "resolve_addr signature changed in DolRecomp"
-s = '#include "alias.h"\n' + s.replace(hook, hook + "\n    addr = alias_translate(addr);\n    { u8 *hr = host_region_resolve(addr, avail); if (hr) return hr; }", 1)
+s = '#include "alias.h"\n' + s.replace(hook, hook + "\n    { u8 *fp = page_fast(addr, avail); if (fp) return fp; }\n    addr = alias_translate(addr);\n    { u8 *hr = host_region_resolve(addr, avail); if (hr) return hr; }", 1)
 open(sys.argv[2], "w").write(s)
 PY
 $CC -O2 -w -c $INC -I"$DOLRECOMP/src/cpu" "$OUT/cpu_alias.c" -o "$OUT/cpu.o"
@@ -67,10 +67,11 @@ $CC -O1 -Wall -c $INC "$HERE/disc.c" -o "$OUT/disc.o"
 $CC -O1 -Wall -c $INC "$HERE/irq.c" -o "$OUT/irq.o"
 $CC -O2 -Wall -c $INC "$HERE/gx_fifo.c" -o "$OUT/gx_fifo.o"
 $CC -O2 -Wall -c $INC "$HERE/gx_render.c" -o "$OUT/gx_render.o"
+$CC -O2 -Wall -c $INC "$HERE/gx_gles.c" -o "$OUT/gx_gles.o"
 $CC -O1 -Wall -c $INC "$HERE/modules.c" -o "$OUT/modules.o"
 $CC -O1 -Wall -c $INC "$HERE/input.c" -o "$OUT/input.o"
 $CC -O1 -Wall -c $INC "$HERE/card.c" -o "$OUT/card.o"
 $CC -O1 -Wall -c $INC "$HERE/core.c" -o "$OUT/core.o"
 $CC -O1 -Wall -c $INC "$HERE/boot_test.c" -o "$OUT/boot_test.o"
-$CC -o "$OUT/boot_test" "$OUT/boot_test.o" "$OUT/core.o" "$OUT/hle.o" "$OUT/hw.o" "$OUT/disc.o" "$OUT/irq.o" "$OUT/gx_fifo.o" "$OUT/gx_render.o" "$OUT/modules.o" "$OUT/input.o" "$OUT/card.o" "$OUT/cpu.o" "$OUT"/obj/*.o $MODOBJS -lm
+$CC -o "$OUT/boot_test" "$OUT/boot_test.o" "$OUT/core.o" "$OUT/hle.o" "$OUT/hw.o" "$OUT/disc.o" "$OUT/irq.o" "$OUT/gx_fifo.o" "$OUT/gx_render.o" "$OUT/gx_gles.o" "$OUT/modules.o" "$OUT/input.o" "$OUT/card.o" "$OUT/cpu.o" "$OUT"/obj/*.o $MODOBJS -lm -l:libEGL.so.1 -l:libGLESv2.so.2
 echo "built $OUT/boot_test"

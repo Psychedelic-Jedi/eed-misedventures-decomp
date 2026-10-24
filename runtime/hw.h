@@ -9,3 +9,4 @@ int hw_interrupt_pending(void);
 void hw_debug_dump(void);
 extern unsigned long long vi_frames;
 void hw_tick(CPUState *cpu);
+u64 hw_next_tick_tb(void);   /* time base of the next VI retrace */

@@ -11,16 +11,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gx.h"
+#include "gx_render.h"
 #include "platform.h"
+#include "alias.h"
 
-#define EFB_W 640
-#define EFB_H 528
 
 static u8 efb[EFB_H][EFB_W][4];
 static float zbuf[EFB_H][EFB_W];
-static u8 tmem[1 << 20];
+u8 tmem[1 << 20];
 unsigned long long gx_frames;
-static int g_cull_flip;
+int g_cull_flip;
 
 void gx_render_init(void) {
     gx.bp[0xFE] = 0xFFFFFF;
@@ -29,7 +29,7 @@ void gx_render_init(void) {
 }
 
 /* ------------------------------------------------------------------ memory */
-static u8 rd8(u32 a) { return mem_read8(gx_cpu, a | 0x80000000u); }
+static u8 rd8(u32 a) { u32 av; const u8 *p = page_fast(a | 0x80000000u, &av); return p ? *p : mem_read8(gx_cpu, a | 0x80000000u); }
 
 typedef struct { const u8 *p; u32 addr; int mem; } Reader;
 static u8 rb(Reader *r) { return r->mem ? rd8(r->addr++) : *r->p++; }
@@ -72,7 +72,6 @@ typedef struct {
     int has_col[2];
 } Vtx;
 
-typedef struct { float x, y, z, w; float tc[8][3]; float col[2][4]; } SVtx; /* transformed */
 
 /* Attribute reader: direct data from the stream, or an index into a CP array. */
 static Reader attr_reader(Reader *stream, u32 type, u32 array) {
@@ -270,7 +269,7 @@ static void palette(u32 fmt, u16 v, u8 *o) {
     else rgb5a3(v, o);
 }
 
-static u8 *decode_texture(u32 addr, int w, int h, u32 fmt, u32 tlut_off, u32 tlut_fmt) {
+u8 *decode_texture(u32 addr, int w, int h, u32 fmt, u32 tlut_off, u32 tlut_fmt) {
     u8 *out = calloc((size_t)w * h, 4);
     addr |= 0x80000000u;
     static const int bw[16] = {8, 8, 8, 4, 4, 4, 4, 0, 8, 8, 4, 0, 0, 0, 8, 0};
@@ -374,8 +373,8 @@ static void sample(Tex *t, int map, float s, float tt, float out[4]) {
 }
 
 /* ------------------------------------------------------------------ TEV */
-static float tev_reg[4][4];      /* PREV, C0, C1, C2 (signed, 11-bit range) */
-static float tev_konst[4][4];
+float tev_reg[4][4];      /* PREV, C0, C1, C2 (signed, 11-bit range) */
+float tev_konst[4][4];
 
 static void konst(int stage, float kc[4]) {
     u32 ksel = gx.bp[0xF6 + stage / 2];
@@ -588,11 +587,15 @@ static void raster_tri(const SVtx *v0, const SVtx *v1, const SVtx *v2) {
         }
 }
 
+int gx_use_gles;
 void gx_render_draw(u8 prim, u8 vat, u16 count, const u8 *data) {
     if (!count) return;
-    SVtx *sv = malloc(sizeof(SVtx) * count);
+    static SVtx *sv;
+    static int cap;
+    if (count > cap) { cap = count * 2; sv = realloc(sv, sizeof(SVtx) * cap); }
     Reader s = {data, 0, 0};
     for (u16 i = 0; i < count; i++) { Vtx v; decode_vertex(&s, vat, &v); transform(&v, &sv[i]); }
+    if (gx_use_gles) { gles_draw(prim, sv, count); return; }
     switch (prim) {
     case 0x80: case 0x88:                          /* quads */
         for (int i = 0; i + 3 < count; i += 4) { raster_tri(&sv[i], &sv[i + 1], &sv[i + 2]); raster_tri(&sv[i], &sv[i + 2], &sv[i + 3]); }
@@ -611,11 +614,11 @@ void gx_render_draw(u8 prim, u8 vat, u16 count, const u8 *data) {
         break;
     default: break;                                /* lines/points: TODO */
     }
-    free(sv);
 }
 
 /* ------------------------------------------------------------------ BP side effects */
 void gx_render_bp(u8 reg, u32 v) {
+    if (gx_use_gles && reg == 0x52) { gles_bp(reg, v); return; }
     switch (reg) {
     case 0x65: {                                   /* load TLUT: RAM (0x64) -> TMEM */
         u32 src = (gx.bp[0x64] & 0xFFFFFF) << 5, dst = (v & 0x3FF) << 9, n = (v & 0x1FFC00) >> 5;

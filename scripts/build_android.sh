@@ -104,13 +104,13 @@ import sys
 s = open(sys.argv[1]).read()
 hook = "static u8* resolve_addr(CPUState* cpu, u32 addr, u32* avail) {"
 assert hook in s, "resolve_addr signature changed in DolRecomp"
-s = '#include "alias.h"\n' + s.replace(hook, hook + "\n    addr = alias_translate(addr);\n    { u8 *hr = host_region_resolve(addr, avail); if (hr) return hr; }", 1)
+s = '#include "alias.h"\n' + s.replace(hook, hook + "\n    { u8 *fp = page_fast(addr, avail); if (fp) return fp; }\n    addr = alias_translate(addr);\n    { u8 *hr = host_region_resolve(addr, avail); if (hr) return hr; }", 1)
 open(sys.argv[2], "w").write(s)
 PY
 RT="$ROOT/runtime"
 RCC="clang --target=aarch64-linux-android26 -fPIC -O2 -I$DR/src -I$DR/src/cpu -I$WORK/dol/generated -I$WORK -I$RT"
 mkdir -p "$WORK/rt"
-for f in core hle hw disc irq gx_fifo gx_render modules input card; do $RCC -c "$RT/$f.c" -o "$WORK/rt/$f.o"; done
+for f in core hle hw disc irq gx_fifo gx_render gx_gles modules input card; do $RCC -c "$RT/$f.c" -o "$WORK/rt/$f.o"; done
 $RCC -w -c "$WORK/cpu_alias.c" -o "$WORK/rt/cpu.o"
 $RCC -c "$RT/android/android_main.c" -o "$WORK/rt/android_main.o"
 

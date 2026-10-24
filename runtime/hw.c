@@ -257,8 +257,9 @@ void hw_debug_dump(void) {
 
 /* Vertical retrace every 1/60 s of time base (40.5 MHz): raise VI display interrupts. */
 unsigned long long vi_frames;
+static u64 next;
+u64 hw_next_tick_tb(void) { return next; }
 void hw_tick(CPUState *cpu) {
-    static u64 next;
     if (cpu->timebase < next) return;
     next = cpu->timebase + 675000;
     vi_frames++;

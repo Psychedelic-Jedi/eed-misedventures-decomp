@@ -83,12 +83,16 @@ static GLuint program(const char *vs, const char *fs) {
 static void gl_init_context(void) {
     g_dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     eglInitialize(g_dpy, NULL, NULL);
-    const EGLint attrs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-                            EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE};
-    EGLint n;
-    eglChooseConfig(g_dpy, attrs, &g_cfg, 1, &n);
-    const EGLint ctx_attrs[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
-    g_ctx = eglCreateContext(g_dpy, g_cfg, EGL_NO_CONTEXT, ctx_attrs);
+    /* GLES 3 if available (24-bit depth for the EFB), else GLES 2 */
+    for (int ver = 3; ver >= 2 && !g_ctx; ver--) {
+        const EGLint attrs[] = {EGL_RENDERABLE_TYPE, ver == 3 ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_ES2_BIT,
+                                EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                                EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE};
+        EGLint n = 0;
+        if (!eglChooseConfig(g_dpy, attrs, &g_cfg, 1, &n) || !n) continue;
+        const EGLint ctx_attrs[] = {EGL_CONTEXT_CLIENT_VERSION, ver, EGL_NONE};
+        g_ctx = eglCreateContext(g_dpy, g_cfg, EGL_NO_CONTEXT, ctx_attrs);
+    }
 }
 
 static void gl_init_resources(void) {
@@ -98,7 +102,7 @@ static void gl_init_resources(void) {
         "void main() { v_uv = a_pos; gl_Position = vec4(u_rect.xy + a_pos * u_rect.zw, 0.0, 1.0); }\n";
     const char *fs_tex =
         "precision mediump float; varying vec2 v_uv; uniform sampler2D u_tex; uniform vec4 u_color;\n"
-        "void main() { gl_FragColor = vec4(texture2D(u_tex, vec2(v_uv.x * u_color.x, (1.0 - v_uv.y) * u_color.y)).rgb, 1.0); }\n";
+        "void main() { gl_FragColor = vec4(texture2D(u_tex, u_color.xy + v_uv * u_color.zw).rgb, 1.0); }\n";
     const char *fs_ui =   /* soft-edged circle for touch controls */
         "precision mediump float; varying vec2 v_uv; uniform vec4 u_color;\n"
         "void main() { float d = length(v_uv - 0.5) * 2.0; float a = smoothstep(1.0, 0.92, d);\n"
@@ -321,6 +325,27 @@ static void draw_touch_controls(void) {
     glDisable(GL_BLEND);
 }
 
+/* Draw a texture region (uv origin + size) fitted 4:3 on the window, then the touch overlay. */
+static void present_texture(GLuint tex, float u0, float v0, float du, float dv) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glViewport(0, 0, g_w, g_h);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    float sw = (float)g_w, sh = (float)g_h, gw = sh * 4.0f / 3.0f, gh = sh;
+    if (gw > sw) { gw = sw; gh = sw * 3.0f / 4.0f; }
+    float nx = gw / sw, ny = gh / sh;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glUseProgram(g_prog_tex);
+    glUniform1i(glGetUniformLocation(g_prog_tex, "u_tex"), 0);
+    glUniform4f(glGetUniformLocation(g_prog_tex, "u_color"), u0, v0, du, dv);
+    draw_rect(g_prog_tex, -nx, -ny, nx * 2, ny * 2);
+    draw_touch_controls();
+    eglSwapBuffers(g_dpy, g_surf);
+}
+
 void plat_present_frame(const u8 *rgba, int stride, int x, int y, int w, int h) {
     if (!gl_ensure_surface()) return;
     glBindTexture(GL_TEXTURE_2D, g_tex);
@@ -328,19 +353,14 @@ void plat_present_frame(const u8 *rgba, int stride, int x, int y, int w, int h) 
     /* upload row by row (EFB stride may differ from the copied width) */
     for (int row = 0; row < h; row++)
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, row, w, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba + ((size_t)(y + row) * stride + x) * 4);
-    glViewport(0, 0, g_w, g_h);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    /* fit 4:3 */
-    float sw = (float)g_w, sh = (float)g_h, gw = sh * 4.0f / 3.0f, gh = sh;
-    if (gw > sw) { gw = sw; gh = sw * 3.0f / 4.0f; }
-    float nx = gw / sw, ny = gh / sh;
-    glUseProgram(g_prog_tex);
-    glUniform1i(glGetUniformLocation(g_prog_tex, "u_tex"), 0);
-    glUniform4f(glGetUniformLocation(g_prog_tex, "u_color"), w / 1024.0f, h / 1024.0f, 0, 0);
-    draw_rect(g_prog_tex, -nx, -ny, nx * 2, ny * 2);
-    draw_touch_controls();
-    eglSwapBuffers(g_dpy, g_surf);
+    /* screen bottom (v_uv.y = 0) shows row h-1, top shows row 0 */
+    present_texture(g_tex, 0, h / 1024.0f, w / 1024.0f, -h / 1024.0f);
+}
+
+/* GLES backend: the EFB texture is bottom-up (GL convention); region given top-down. */
+void plat_present_gl(unsigned tex, int tex_w, int tex_h, int x, int y, int w, int h) {
+    if (!gl_ensure_surface()) return;
+    present_texture(tex, (float)x / tex_w, 1.0f - (float)(y + h) / tex_h, (float)w / tex_w, (float)h / tex_h);
 }
 
 /* ------------------------------------------------------------ game thread */
@@ -494,6 +514,14 @@ static void *game_thread(void *arg) {
             g_quiet_find = 1;
         }
         g_quiet_find = 0;
+    }
+    /* GPU renderer (EED_SOFTWARE=1 in the environment would fall back, for debugging) */
+    {
+        extern int gx_use_gles, gx_gles_scale, di_trace, disc_trace, irq_trace;
+        gx_use_gles = getenv("EED_SOFTWARE") == NULL;
+        gx_gles_scale = 2;
+        di_trace = disc_trace = irq_trace = 0;
+        fprintf(stderr, "[android] renderer: %s\n", gx_use_gles ? "GPU (GLES)" : "software");
     }
     char card[1024];
     snprintf(card, sizeof card, "/storage/emulated/0/Download/eed_memcard");

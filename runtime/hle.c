@@ -9,6 +9,7 @@
 #include "alias.h"
 #include "input.h"
 #include "card.h"
+#include "platform.h"
 #include "hw.h"
 
 static void hle___OSInitAudioSystem(CPUState *cpu) {
@@ -152,7 +153,7 @@ static void hle_VMAlloc(CPUState *cpu) {
 static void hle_PADRead(CPUState *cpu) {
     u32 st = cpu->gpr[3];
     static unsigned long long last;
-    if (vi_frames != last) { input_update(vi_frames); last = vi_frames; }
+    if (vi_frames != last) { plat_input_update(vi_frames); last = vi_frames; }
     for (int i = 0; i < 4; i++, st += 12) {
         PadState *p = &g_pad[i];
         mem_write16(cpu, st + 0, p->connected ? p->buttons : 0);

@@ -66,3 +66,14 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
 
 Run: `EED_MODULES=path/to/linked_dols ./build/recomp/boot_test main.dol 20 path/to/game.ciso`
 Build with modules: `MODDOLS=path/to/linked_dols DOLRECOMP=... sh runtime/build.sh`
+
+## Android build (on the phone, in Termux)
+```
+pkg install clang cmake make python aapt2 apksigner zip git
+sh scripts/build_android.sh ~/storage/downloads/game.ciso
+```
+Produces `Download/eed.apk`. Install it, then allow *All files access* for the app
+(Settings → Apps → Ed, Edd n Eddy → Permissions). The app reads the first `.ciso/.iso/.gcm`
+in Download/, saves to `Download/eed_memcard/`, and logs to `Download/eed_log.txt`.
+Screen colours on failure: dark red = no disc found / no permission, orange = disc unreadable,
+blue = the game stopped with an error (send the log).

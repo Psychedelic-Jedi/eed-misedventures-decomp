@@ -13,6 +13,7 @@
 #include <string.h>
 #include "modules.h"
 #include "alias.h"
+#include "platform.h"
 
 typedef DolRecompFunction (*FindFn)(u32);
 
@@ -98,7 +99,11 @@ bool module_host_call(CPUState *cpu, u32 addr) {
 static u32 be32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
 
 /* Copy a pre-linked module (.dol written by gctool.py) into guest RAM. */
+static void copy_dol(CPUState *cpu, const u8 *d, long n);
 static int install_image(CPUState *cpu, const char *name) {
+    u32 esz;
+    const u8 *emb = plat_embedded_module(name, &esz);
+    if (emb) { copy_dol(cpu, emb, (long)esz); return 1; }
     char path[1024];
     snprintf(path, sizeof path, "%s/%s.dol", module_dir ? module_dir : ".", name);
     FILE *f = fopen(path, "rb");
@@ -107,12 +112,16 @@ static int install_image(CPUState *cpu, const char *name) {
     u8 *d = malloc(n);
     if (fread(d, 1, n, f) != (size_t)n) { fclose(f); free(d); return 0; }
     fclose(f);
+    copy_dol(cpu, d, n);
+    free(d);
+    return 1;
+}
+
+static void copy_dol(CPUState *cpu, const u8 *d, long n) {
     for (int i = 0; i < 18; i++) {
         u32 off = be32(d + i * 4), addr = be32(d + 0x48 + i * 4), sz = be32(d + 0x90 + i * 4);
         for (u32 j = 0; j < sz && off + j < (u32)n; j++) mem_write8(cpu, addr + j, d[off + j]);
     }
-    free(d);
-    return 1;
 }
 
 static int find_module(CPUState *cpu, u32 mod, char *name) {

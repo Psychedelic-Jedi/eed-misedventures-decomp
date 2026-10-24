@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gx.h"
+#include "platform.h"
 
 #define EFB_W 640
 #define EFB_H 528
@@ -19,14 +20,10 @@ static u8 efb[EFB_H][EFB_W][4];
 static float zbuf[EFB_H][EFB_W];
 static u8 tmem[1 << 20];
 unsigned long long gx_frames;
-static const char *g_frame_dir;
-static int g_frame_every = 30;
 static int g_cull_flip;
 
 void gx_render_init(void) {
     gx.bp[0xFE] = 0xFFFFFF;
-    g_frame_dir = getenv("EED_FRAMES");
-    if (getenv("EED_FRAME_EVERY")) g_frame_every = atoi(getenv("EED_FRAME_EVERY"));
     g_cull_flip = getenv("EED_CULL_FLIP") == NULL;  /* verified against the outline pass in Scam 1 */
     for (int y = 0; y < EFB_H; y++) for (int x = 0; x < EFB_W; x++) zbuf[y][x] = 1.0f;
 }
@@ -618,18 +615,6 @@ void gx_render_draw(u8 prim, u8 vat, u16 count, const u8 *data) {
 }
 
 /* ------------------------------------------------------------------ BP side effects */
-static void write_frame(int x0, int y0, int w, int h) {
-    if (!g_frame_dir || (gx_frames % (unsigned)g_frame_every)) return;
-    char path[512];
-    snprintf(path, sizeof path, "%s/frame_%05llu.ppm", g_frame_dir, gx_frames);
-    FILE *f = fopen(path, "wb");
-    if (!f) return;
-    fprintf(f, "P6\n%d %d\n255\n", w, h);
-    for (int y = y0; y < y0 + h && y < EFB_H; y++)
-        for (int x = x0; x < x0 + w && x < EFB_W; x++) fwrite(efb[y][x], 1, 3, f);
-    fclose(f);
-}
-
 void gx_render_bp(u8 reg, u32 v) {
     switch (reg) {
     case 0x65: {                                   /* load TLUT: RAM (0x64) -> TMEM */
@@ -650,7 +635,12 @@ void gx_render_bp(u8 reg, u32 v) {
     case 0x52: {                                   /* EFB copy */
         int x0 = gx.bp[0x49] & 0x3FF, y0 = (gx.bp[0x49] >> 10) & 0x3FF;
         int w = (gx.bp[0x4A] & 0x3FF) + 1, h = ((gx.bp[0x4A] >> 10) & 0x3FF) + 1;
-        if ((v >> 14) & 1) { write_frame(x0, y0, w, h); gx_frames++; }
+        if ((v >> 14) & 1) {
+            if (x0 + w > EFB_W) w = EFB_W - x0;
+            if (y0 + h > EFB_H) h = EFB_H - y0;
+            plat_present_frame(&efb[0][0][0], EFB_W, x0, y0, w, h);
+            gx_frames++;
+        }
         if ((v >> 11) & 1) {                       /* clear after copy */
             u32 ar = gx.bp[0x4F], gb = gx.bp[0x50];
             u8 c[4] = {(u8)ar, (u8)(gb >> 8), (u8)gb, (u8)(ar >> 8)};

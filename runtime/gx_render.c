@@ -604,7 +604,10 @@ void gx_render_draw(u8 prim, u8 vat, u16 count, const u8 *data) {
         for (int i = 0; i + 2 < count; i += 3) raster_tri(&sv[i], &sv[i + 1], &sv[i + 2]);
         break;
     case 0x98:                                     /* strip */
-        for (int i = 0; i + 2 < count; i++) raster_tri(&sv[i], &sv[i + 1], &sv[i + 2]);
+        for (int i = 0; i + 2 < count; i++) {     /* odd triangles have flipped winding */
+            if (i & 1) raster_tri(&sv[i + 1], &sv[i], &sv[i + 2]);
+            else raster_tri(&sv[i], &sv[i + 1], &sv[i + 2]);
+        }
         break;
     case 0xA0:                                     /* fan */
         for (int i = 1; i + 1 < count; i++) raster_tri(&sv[0], &sv[i], &sv[i + 1]);

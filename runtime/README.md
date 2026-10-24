@@ -58,7 +58,7 @@ The first build compiles ~150 MB of generated C (~20 min on 2 cores); later buil
     screens, the three Eds animated. Renderer additions: hardware lighting (8 lights, spot/spec/dir attenuation,
     diffuse functions), texgen from normals/colours + dual-tex post transform, face culling. ✅
 19. Next ⏳
-    - Dark triangle patches on characters (toon ramp / depth precision).
+    - (fixed) dark triangles on characters: odd triangles in strips need flipped winding for culling.
     - Lighting (XF light units) for correct colours.
     - GLES backend for Android reusing the decode/TEV front half.
     - PAD/SI input (language select waits for a button).

@@ -64,3 +64,14 @@ u32 strings_offset    NUL-terminated import names
 - Imports are resolved by name against engine globals: lvloader imports `gApiInput`, `gApiHud`.
   Engine services are reached through API structs of function pointers (e.g. `lbl_8` → `+0x58` is an error/assert reporter taking message, file, line).
 - LU code style (r9–r11 scratch, `subfic/adde` idioms, no SDA) differs from main.dol (Metrowerks): LU modules are possibly built with a different compiler (GCC/ProDG?). Needs confirmation.
+
+### Relocation kinds (confirmed on mainmenu.gc)
+| Kind | ELF equivalent | Where | Notes |
+|---|---|---|---|
+| 1 | `R_PPC_ADDR32` | data | function-pointer tables (callbacks); word is 0 |
+| 2 | `R_PPC_ADDR16_LO` | text | |
+| 3 | `R_PPC_ADDR16_HA` | text | always on `lis` |
+| 4 | `R_PPC_REL24` | text | `bl` |
+| 5 | `R_PPC_ADDR32` | data | switch jump tables; word pre-filled with a text-relative offset |
+
+`mainmenu` code: image 0x1F244 bytes, text from 0x36C0, ~190 functions, imports `memcpy`, `memset`.

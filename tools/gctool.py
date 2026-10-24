@@ -96,7 +96,9 @@ class CodeModule:
         self.prologues = [o for o in prologues if o >= first]
 
 
-R_MAP = {1: 1, 2: 4, 3: 6, 4: 10}  # gc kind -> R_PPC_ADDR32/ADDR16_LO/ADDR16_HA/REL24
+R_MAP = {1: 1, 2: 4, 3: 6, 4: 10, 5: 1}
+# gc kind -> ELF: 1 ADDR32 (pointer tables), 2 ADDR16_LO, 3 ADDR16_HA, 4 REL24 (bl),
+# 5 ADDR32 (switch jump tables; word pre-filled with a text-relative offset)
 
 
 def write_elf(mod, path):
@@ -119,6 +121,8 @@ def write_elf(mod, path):
     symmap = {}
     defined = {v for i, v in enumerate(mod.syms) if i >= 7 and i not in import_idx and v}
     func_set = {mod.syms[t] for k, t, _, _ in mod.relocs if k == 4} | set(mod.prologues)
+    # pointer-table (kind 1) targets inside text are callbacks
+    func_set |= {mod.syms[t] for k, t, _, _ in mod.relocs if k == 1 and t != 1 and mod.syms[t] >= ts}
     func_set.add(ts)
     defined = sorted(defined | func_set)
     for v in defined:
@@ -156,6 +160,8 @@ def write_elf(mod, path):
             struct.pack_into(">I", img, off, w)
         elif kind in (2, 3):
             struct.pack_into(">H", img, off, 0)
+        elif kind in (1, 5):
+            struct.pack_into(">I", img, off, 0)
     data_b, text_b = bytes(img[:ts]), bytes(img[ts:])
 
     # globals must come after locals

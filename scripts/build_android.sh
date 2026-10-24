@@ -12,7 +12,7 @@
 #   6. link libeed.so and package + sign the APK -> Download/eed.apk
 #
 # Nothing derived from the game leaves your phone. Needs:
-#   pkg install clang cmake make python aapt2 apksigner zip git
+#   pkg install clang cmake make python apksigner git
 #   and dtk (decomp-toolkit) in ~/.cargo/bin.
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -146,14 +146,10 @@ echo "   libeed.so: $(du -h "$WORK/apk/lib/arm64-v8a/libeed.so" | cut -f1)"
 echo "   dependencies:"
 llvm-readelf -d "$WORK/apk/lib/arm64-v8a/libeed.so" 2>/dev/null | grep -E "NEEDED|RPATH|RUNPATH" | sed 's/^/     /' || true
 
-JAR=$PREFIX/share/aapt/android.jar
-rm -f "$WORK/base.apk"
-if command -v aapt >/dev/null; then
-    aapt package -f -M "$ROOT/runtime/android/AndroidManifest.xml" -I "$JAR" -F "$WORK/base.apk"
-else
-    aapt2 link -o "$WORK/base.apk" --manifest "$ROOT/runtime/android/AndroidManifest.xml" -I "$JAR"
-fi
-python3 "$ROOT/tools/apk_pack.py" "$WORK/base.apk" "$WORK/unsigned.apk" "lib/arm64-v8a/libeed.so=$WORK/apk/lib/arm64-v8a/libeed.so"
+# binary manifest compiled directly (Termux's android.jar is a stub, so aapt can't be used)
+python3 "$ROOT/tools/axml.py" "$ROOT/runtime/android/AndroidManifest.xml" "$WORK/AndroidManifest.bin"
+python3 "$ROOT/tools/apk_pack.py" - "$WORK/unsigned.apk" "AndroidManifest.xml=$WORK/AndroidManifest.bin" \
+    "lib/arm64-v8a/libeed.so=$WORK/apk/lib/arm64-v8a/libeed.so"
 KS=$WORK/eed.keystore
 [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass eedport -keypass eedport -alias eed \
     -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=eed-port" >/dev/null 2>&1

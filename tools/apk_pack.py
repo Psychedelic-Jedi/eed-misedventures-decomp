@@ -3,7 +3,8 @@
 with the alignment Android requires (stored entries 4-byte aligned, resources.arsc
 stored uncompressed). Replaces zipalign, which Termux doesn't ship.
 
-Usage: apk_pack.py <base.apk> <out.apk> <zip_path>=<file> ...
+Usage: apk_pack.py <base.apk|-> <out.apk> <zip_path>=<file> ...
+       (base "-" = no base; pass AndroidManifest.xml=<binary manifest> as an entry)
 """
 import sys
 import zipfile
@@ -12,6 +13,9 @@ import zlib
 
 def main():
     base, out, extra = sys.argv[1], sys.argv[2], sys.argv[3:]
+    import io
+    if base == "-":
+        buf = io.BytesIO(); zipfile.ZipFile(buf, "w").close(); buf.seek(0); base = buf
     with zipfile.ZipFile(base) as zin, open(out, "wb") as raw:
         zout = zipfile.ZipFile(raw, "w")
 

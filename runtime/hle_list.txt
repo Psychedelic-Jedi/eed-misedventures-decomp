@@ -1,0 +1,3 @@
+# Functions replaced with native implementations (see hle.c).
+__OSInitAudioSystem     # boots the audio DSP and waits for its mailbox; host audio is set up natively
+__DSP_boot_task   # mailbox handshake with the DSP ucode loader

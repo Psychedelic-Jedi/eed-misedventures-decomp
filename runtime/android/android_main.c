@@ -13,6 +13,8 @@
 #include <android/native_activity.h>
 #include <android/native_window.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <jni.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -346,13 +348,75 @@ static int has_suffix(const char *s, const char *suf) {
     size_t a = strlen(s), b = strlen(suf);
     return a >= b && !strcasecmp(s + a - b, suf);
 }
+static ANativeActivity *g_activity;
+
+/* "All files access" (MANAGE_EXTERNAL_STORAGE). Without it Android 11+ hides other
+ * apps' files (like the disc image) from directory listings. Returns 1 if granted
+ * or not applicable, 0 if not granted, -1 if unknown. */
+static JNIEnv *jni_env(void) {
+    JNIEnv *env = NULL;
+    JavaVM *vm = g_activity->vm;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK)
+        (*vm)->AttachCurrentThread(vm, &env, NULL);
+    return env;
+}
+static int jni_clear(JNIEnv *env) {
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 1; }
+    return 0;
+}
+static int storage_granted(void) {
+    JNIEnv *env = jni_env();
+    if (!env) return -1;
+    jclass ec = (*env)->FindClass(env, "android/os/Environment");
+    if (jni_clear(env) || !ec) return -1;
+    jmethodID m = (*env)->GetStaticMethodID(env, ec, "isExternalStorageManager", "()Z");
+    if (jni_clear(env) || !m) return 1;              /* Android 10 or older: legacy storage */
+    jboolean r = (*env)->CallStaticBooleanMethod(env, ec, m);
+    if (jni_clear(env)) return -1;
+    return r ? 1 : 0;
+}
+static void open_storage_settings(void) {
+    JNIEnv *env = jni_env();
+    if (!env) return;
+    jobject act = g_activity->clazz;
+    jclass ac = (*env)->GetObjectClass(env, act);
+    jclass ic = (*env)->FindClass(env, "android/content/Intent");
+    jclass uc = (*env)->FindClass(env, "android/net/Uri");
+    if (jni_clear(env) || !ic || !uc) return;
+    jstring pkg = (jstring)(*env)->CallObjectMethod(env, act,
+        (*env)->GetMethodID(env, ac, "getPackageName", "()Ljava/lang/String;"));
+    if (jni_clear(env) || !pkg) return;
+    const char *p = (*env)->GetStringUTFChars(env, pkg, NULL);
+    char uri[256];
+    snprintf(uri, sizeof uri, "package:%s", p);
+    (*env)->ReleaseStringUTFChars(env, pkg, p);
+    jobject u = (*env)->CallStaticObjectMethod(env, uc,
+        (*env)->GetStaticMethodID(env, uc, "parse", "(Ljava/lang/String;)Landroid/net/Uri;"),
+        (*env)->NewStringUTF(env, uri));
+    jmethodID start = (*env)->GetMethodID(env, ac, "startActivity", "(Landroid/content/Intent;)V");
+    jobject in = (*env)->NewObject(env, ic,
+        (*env)->GetMethodID(env, ic, "<init>", "(Ljava/lang/String;Landroid/net/Uri;)V"),
+        (*env)->NewStringUTF(env, "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION"), u);
+    if (!jni_clear(env) && in) {
+        (*env)->CallVoidMethod(env, act, start, in);
+        if (!jni_clear(env)) return;
+    }
+    /* fallback: the general list of apps with all-files access */
+    in = (*env)->NewObject(env, ic, (*env)->GetMethodID(env, ic, "<init>", "(Ljava/lang/String;)V"),
+        (*env)->NewStringUTF(env, "android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION"));
+    if (!jni_clear(env) && in) { (*env)->CallVoidMethod(env, act, start, in); jni_clear(env); }
+}
+
+static int g_quiet_find;
 static int find_disc(char *out, size_t n) {
     static const char *dirs[] = {"/storage/emulated/0/Download", "/sdcard/Download", "/storage/emulated/0", NULL};
     for (int i = 0; dirs[i]; i++) {
         DIR *d = opendir(dirs[i]);
-        if (!d) continue;
+        if (!d) { if (!g_quiet_find) fprintf(stderr, "[android] cannot open %s\n", dirs[i]); continue; }
         struct dirent *e;
+        int count = 0;
         while ((e = readdir(d))) {
+            if (!g_quiet_find && count++ < 40) fprintf(stderr, "[android]   %s/%s\n", dirs[i], e->d_name);
             if (has_suffix(e->d_name, ".ciso") || has_suffix(e->d_name, ".iso") || has_suffix(e->d_name, ".gcm")) {
                 snprintf(out, n, "%s/%s", dirs[i], e->d_name);
                 closedir(d);
@@ -386,15 +450,50 @@ static void *game_thread(void *arg) {
     glClear(GL_COLOR_BUFFER_BIT);
     eglSwapBuffers(g_dpy, g_surf);
 
-    if (!freopen("/storage/emulated/0/Download/eed_log.txt", "w", stderr))
-        LOGI("cannot write log to Download/ (grant All files access)");
-    setvbuf(stderr, NULL, _IOLBF, 0);
+    {   /* log file: unbuffered, append-mode fd on stderr so nothing is lost or overwritten */
+        int fd = open("/storage/emulated/0/Download/eed_log.txt", O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0644);
+        if (fd >= 0) { dup2(fd, 2); close(fd); }
+        else LOGI("cannot write log to Download/ (grant All files access)");
+        setvbuf(stderr, NULL, _IONBF, 0);
+        fprintf(stderr, "[android] eedport log, pid %d\n", (int)getpid());
+    }
+    int g = storage_granted();
+    fprintf(stderr, "[android] all-files access: %s\n", g == 1 ? "granted" : g == 0 ? "NOT granted" : "unknown");
+    if (g == 0) {
+        /* open the settings page and wait (yellow screen) until the switch is turned on */
+        open_storage_settings();
+        while (!g_stop && storage_granted() == 0) {
+            if (gl_ensure_surface()) {
+                glViewport(0, 0, g_w, g_h);
+                glClearColor(0.5f, 0.45f, 0.0f, 1);
+                glClear(GL_COLOR_BUFFER_BIT);
+                eglSwapBuffers(g_dpy, g_surf);
+            }
+            usleep(500000);
+        }
+        if (g_stop) return NULL;
+        fprintf(stderr, "[android] all-files access granted\n");
+    }
     char disc[1024];
     if (!find_disc(disc, sizeof disc)) {
+        /* Without "All files access", Android hides other apps' files (like the disc
+         * image) from this app. Open the settings page and keep looking (dark red)
+         * until the disc shows up, then start without needing a restart. */
         LOGI("no disc image found in Download/");
-        fprintf(stderr, "No .ciso/.iso found in Download/. Copy your dump there and grant All files access.\n");
-        show_error_screen(0.5f, 0.0f, 0.0f);   /* dark red: disc not found / no permission */
-        return NULL;
+        fprintf(stderr, "No .ciso/.iso visible in Download/. Copy your dump there and turn on All files access.\n");
+        open_storage_settings();
+        for (int tries = 0; !find_disc(disc, sizeof disc); tries++) {
+            if (gl_ensure_surface()) {
+                glViewport(0, 0, g_w, g_h);
+                glClearColor(0.5f, 0.0f, 0.0f, 1);   /* dark red: disc not found / no permission */
+                glClear(GL_COLOR_BUFFER_BIT);
+                eglSwapBuffers(g_dpy, g_surf);
+            }
+            for (int k = 0; k < 10 && !g_stop; k++) usleep(100000);
+            if (g_stop) return NULL;
+            g_quiet_find = 1;
+        }
+        g_quiet_find = 0;
     }
     char card[1024];
     snprintf(card, sizeof card, "/storage/emulated/0/Download/eed_memcard");
@@ -440,6 +539,7 @@ static void on_destroy(ANativeActivity *a) {
 
 __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActivity *a, void *state, size_t size) {
     (void)state; (void)size;
+    g_activity = a;
     a->callbacks->onNativeWindowCreated = on_window_created;
     a->callbacks->onNativeWindowDestroyed = on_window_destroyed;
     a->callbacks->onInputQueueCreated = on_queue_created;
